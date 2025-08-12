@@ -15,9 +15,11 @@ import autoTable from "jspdf-autotable";
 // Tipos
 type DiaTrabalho = { data: string; horas: number };
 
+type OperacaoTipo = "ordinaria" | "reveillon" | "carnaval";
+
 type Lancamento = {
   id: string;
-  operacao: OperacaoID;
+  operacao: OperacaoTipo;
   nomeOperacao: string;
   periodo: { inicio: string; fim: string };
   servidor: Servidor;
@@ -25,8 +27,6 @@ type Lancamento = {
   dias: DiaTrabalho[];
   createdAt: string;
 };
-
-type OperacaoID = "padrao" | "dezembro" | "janeiro" | "reveillon" | "carnaval";
 
 type FuncaoID = "coordenador" | "supervisor" | "agente" | "apoio";
 
@@ -37,13 +37,92 @@ const valoresFuncao: Record<FuncaoID, number> = {
   apoio: 10,
 };
 
-const operacoes: { id: OperacaoID; label: string }[] = [
-  { id: "padrao", label: "Padrão (21/mês - 20/mês+1)" },
-  { id: "dezembro", label: "Dezembro (21-31/12)" },
-  { id: "janeiro", label: "Janeiro (01-20/01)" },
-  { id: "reveillon", label: "Reveillon" },
-  { id: "carnaval", label: "Carnaval" },
-];
+// Operações dinâmicas por ano
+type OpItem = { id: string; label: string; inicio: string; fim: string; tipo: OperacaoTipo };
+
+// Utils de datas
+const pad2 = (n: number) => n.toString().padStart(2, "0");
+const toISO = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+// Páscoa (Meeus/Jones/Butcher)
+const easterSunday = (year: number) => {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31); // 3=March, 4=April
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+};
+const addDays = (d: Date, delta: number) => {
+  const nd = new Date(d);
+  nd.setDate(nd.getDate() + delta);
+  return nd;
+};
+const carnavalPeriodo = (year: number) => {
+  const pascoa = easterSunday(year);
+  const terca = addDays(pascoa, -47);
+  const sexta = addDays(terca, -4);
+  return { inicio: toISO(sexta), fim: toISO(terca) };
+};
+
+const buildOpcoes = (year: number): OpItem[] => {
+  const ops: OpItem[] = [];
+  // 01/01 a 20/01
+  ops.push({
+    id: `ordinaria-01-20-jan-${year}`,
+    label: `01/01 a 20/01/${year}`,
+    inicio: `${year}-01-01`,
+    fim: `${year}-01-20`,
+    tipo: "ordinaria",
+  });
+  // 21/01 a 20/02 ... 21/11 a 20/12
+  for (let m = 0; m <= 10; m++) {
+    const start = new Date(year, m, 21);
+    const end = new Date(year, m + 1, 20);
+    ops.push({
+      id: `ordinaria-21-${pad2(m + 1)}-20-${pad2(m + 2)}-${year}`,
+      label: `21/${pad2(m + 1)} a 20/${pad2(m + 2)}/${year}`,
+      inicio: toISO(start),
+      fim: toISO(end),
+      tipo: "ordinaria",
+    });
+  }
+  // 21/12 a 31/12
+  ops.push({
+    id: `ordinaria-21-31-dez-${year}`,
+    label: `21/12 a 31/12/${year}`,
+    inicio: `${year}-12-21`,
+    fim: `${year}-12-31`,
+    tipo: "ordinaria",
+  });
+  // Reveillon
+  ops.push({
+    id: `reveillon-${year}`,
+    label: `Reveillon ${year}`,
+    inicio: `${year}-12-24`,
+    fim: `${year + 1}-01-01`,
+    tipo: "reveillon",
+  });
+  // Carnaval
+  const car = carnavalPeriodo(year);
+  ops.push({
+    id: `carnaval-${year}`,
+    label: `Carnaval ${year}`,
+    inicio: car.inicio,
+    fim: car.fim,
+    tipo: "carnaval",
+  });
+  return ops;
+};
 
 // Helpers de persistência
 const load = <T,>(key: string, fallback: T): T => {
@@ -68,11 +147,35 @@ const Index = () => {
   const [lancamentos, setLancamentos] = useState<Lancamento[]>(() => load<Lancamento[]>("lancamentos", []));
 
   // Estado de Lançamento
-  const [operacao, setOperacao] = useState<OperacaoID>("reveillon");
-  const [periodo, setPeriodo] = useState({ inicio: "2024-12-24", fim: "2025-01-01" });
+  const initialYear = new Date().getFullYear();
+  const initialOps = buildOpcoes(initialYear);
+  const [ano, setAno] = useState<number>(initialYear);
+  const [operacaoId, setOperacaoId] = useState<string>(initialOps[0]?.id ?? "");
+  const [periodo, setPeriodo] = useState({ inicio: initialOps[0]?.inicio ?? "", fim: initialOps[0]?.fim ?? "" });
   const [funcao, setFuncao] = useState<FuncaoID>("coordenador");
   const [matriculaSelecionada, setMatriculaSelecionada] = useState<string | undefined>(undefined);
-  const [dias, setDias] = useState<DiaTrabalho[]>([{ data: "2024-12-24", horas: 8 }] );
+  const [dias, setDias] = useState<DiaTrabalho[]>([{ data: initialOps[0]?.inicio ?? "", horas: 8 }]);
+
+  // Opções de operação por ano
+  const opcoesOperacao = useMemo(() => buildOpcoes(ano), [ano]);
+  const selectedOp = useMemo(() => opcoesOperacao.find((o) => o.id === operacaoId), [opcoesOperacao, operacaoId]);
+  // Anos disponíveis
+  const anosDisponiveis = useMemo(() => {
+    const cy = new Date().getFullYear();
+    return Array.from({ length: 7 }, (_, i) => cy - 2 + i);
+  }, []);
+  // Ajustar seleção quando o ano muda
+  useEffect(() => {
+    if (!opcoesOperacao.find((o) => o.id === operacaoId)) {
+      const first = opcoesOperacao[0];
+      if (first) {
+        setOperacaoId(first.id);
+        setPeriodo({ inicio: first.inicio, fim: first.fim });
+        setDias([{ data: first.inicio, horas: 8 }]);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opcoesOperacao]);
 
   // Importação Excel
   const [excelFile, setExcelFile] = useState<File | null>(null);
@@ -120,9 +223,9 @@ const Index = () => {
   // Valor por hora considerando a operação
   const valorHoraAtual = useMemo(() => {
     let v = valoresFuncao[funcao];
-    if (operacao === "reveillon") v *= 2;
+    if (selectedOp?.tipo === "reveillon") v *= 2;
     return v;
-  }, [funcao, operacao]);
+  }, [funcao, selectedOp]);
 
   // Persistência
   useEffect(() => save("servidores", servidores), [servidores]);
@@ -171,11 +274,11 @@ const Index = () => {
       return;
     }
 
-    const nomeOperacao = operacoes.find((o) => o.id === operacao)?.label ?? operacao;
+    const nomeOperacao = selectedOp?.label ?? "";
 
     const novo: Lancamento = {
       id: crypto.randomUUID(),
-      operacao,
+      operacao: selectedOp?.tipo ?? "ordinaria",
       nomeOperacao,
       periodo,
       servidor: srv,
@@ -185,9 +288,11 @@ const Index = () => {
     };
 
     setLancamentos((prev) => [novo, ...prev]);
+    // Gerar PDF automaticamente
+    gerarFrequenciaPDF();
     // reset básico
     setDias([{ data: periodo.inicio, horas: 8 }]);
-    toast({ title: "Lançamento salvo" });
+    toast({ title: "Lançamento salvo e PDF gerado" });
   };
 
   // Consolidação
@@ -244,9 +349,9 @@ const Index = () => {
     (doc as any).setFontSize(14);
     doc.text("Frequência de Operação Especial", 105, 32, { align: "center" } as any);
 
-    const nomeOp = operacoes.find((o) => o.id === operacao)?.label ?? operacao;
+    const nomeOp = selectedOp?.label ?? "";
     doc.setFontSize(10);
-    doc.text(`Operação: ${nomeOp} `, 20, 45);
+    doc.text(`Operação: ${nomeOp}`, 20, 45);
     doc.text(`Período: ${periodo.inicio} a ${periodo.fim}`, 20, 52);
     doc.text(`Servidor: ${srv.nome}`, 20, 59);
     doc.text(`Matrícula: ${srv.matricula}`, 20, 66);
@@ -370,6 +475,67 @@ const Index = () => {
     toast({ title: "Planilha gerada" });
   };
 
+  const exportarPlanilhaExcel = () => {
+    if (consolidado.length === 0) {
+      toast({ title: "Nenhum dado para exportar", variant: "destructive" });
+      return;
+    }
+    const headers = [
+      "Matrícula",
+      "Nome",
+      "Coord. (h)",
+      "Super. (h)",
+      "Agente (h)",
+      "Apoio (h)",
+      "Total Horas",
+      "Valor Horas",
+      "Alimentação",
+      "Transporte",
+      "Total Geral",
+    ];
+    const rows = consolidado.map((r) => [
+      r.matricula,
+      r.nome,
+      Number(r.coordenador.toFixed(2)),
+      Number(r.supervisor.toFixed(2)),
+      Number(r.agente.toFixed(2)),
+      Number(r.apoio.toFixed(2)),
+      Number(r.totalHoras.toFixed(2)),
+      Number(r.valorHoras.toFixed(2)),
+      Number(r.alimentacao.toFixed(2)),
+      Number(r.transporte.toFixed(2)),
+      Number(r.totalGeral.toFixed(2)),
+    ]);
+    const totals = consolidado.reduce(
+      (acc, r) => {
+        acc.h += r.totalHoras;
+        acc.v += r.valorHoras;
+        acc.a += r.alimentacao;
+        acc.t += r.transporte;
+        acc.g += r.totalGeral;
+        return acc;
+      },
+      { h: 0, v: 0, a: 0, t: 0, g: 0 }
+    );
+
+    const ws = XLSX.utils.aoa_to_sheet([
+      headers,
+      ...rows,
+      [
+        "TOTAL GERAL", "", "", "", "", "",
+        Number(totals.h.toFixed(2)),
+        Number(totals.v.toFixed(2)),
+        Number(totals.a.toFixed(2)),
+        Number(totals.t.toFixed(2)),
+        Number(totals.g.toFixed(2)),
+      ],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Consolidado");
+    const nomeArquivo = filtroOperacao !== "todos" ? `Planilha_${filtroOperacao.replace(/\s+/g, "_")}.xlsx` : "Planilha_Consolidada_Todas.xlsx";
+    XLSX.writeFile(wb, nomeArquivo);
+    toast({ title: "Planilha Excel gerada" });
+  };
   return (
     <div className="min-h-screen">
       <header className="border-b bg-gradient-to-br from-background to-card/60">
@@ -437,7 +603,7 @@ const Index = () => {
                   <CardTitle>Ajuda</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm text-muted-foreground">Use o botão de teste para popular a base. A importação por Excel poderá ser adicionada depois.</p>
+                  <p className="text-sm text-muted-foreground">Use o botão de teste para popular a base. A importação por Excel está disponível acima.</p>
                 </CardContent>
               </Card>
             </div>
@@ -452,11 +618,33 @@ const Index = () => {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="space-y-2">
+                    <Label>Ano</Label>
+                    <Select value={String(ano)} onValueChange={(v) => setAno(Number(v))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent className="z-50">
+                        {anosDisponiveis.map((y) => (
+                          <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
                     <Label>Operação</Label>
-                    <Select value={operacao} onValueChange={(v: OperacaoID) => setOperacao(v)}>
+                    <Select
+                      value={operacaoId}
+                      onValueChange={(v) => {
+                        setOperacaoId(v);
+                        const op = opcoesOperacao.find((o) => o.id === v);
+                        if (op) {
+                          setPeriodo({ inicio: op.inicio, fim: op.fim });
+                          setDias((d) => (d.length === 0 ? [{ data: op.inicio, horas: 8 }] : d));
+                        }
+                      }}
+                    >
                       <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
                       <SelectContent className="z-50">
-                        {operacoes.map((op) => (
+                        {opcoesOperacao.map((op) => (
                           <SelectItem key={op.id} value={op.id}>{op.label}</SelectItem>
                         ))}
                       </SelectContent>
@@ -513,10 +701,11 @@ const Index = () => {
                       <Input
                         type="number"
                         min={1}
-                        max={operacao === "carnaval" ? 24 : 12}
+                        max={selectedOp?.tipo === "carnaval" ? 24 : 12}
                         value={d.horas}
                         onChange={(e) => {
-                          const n = Math.max(1, Math.min(Number(e.target.value || 0), operacao === "carnaval" ? 24 : 12));
+                          const limit = selectedOp?.tipo === "carnaval" ? 24 : 12;
+                          const n = Math.max(1, Math.min(Number(e.target.value || 0), limit));
                           atualizarDia(i, { horas: n });
                         }}
                         className="w-24"
@@ -558,6 +747,11 @@ const Index = () => {
                       </SelectContent>
                     </Select>
                   </div>
+                </div>
+
+                <div className="flex gap-2 mb-4">
+                  <Button onClick={gerarPlanilhaPDF}>Exportar PDF</Button>
+                  <Button variant="secondary" onClick={exportarPlanilhaExcel}>Exportar Excel</Button>
                 </div>
 
                 <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
