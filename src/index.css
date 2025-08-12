@@ -102,4 +102,15 @@ All colors MUST be HSL.
   body {
     @apply bg-background text-foreground;
   }
+
+  /* Additional design tokens */
+  :root {
+    --primary-glow: 222.2 84% 20%;
+    --accent-strong: 199 89% 48%;
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent-strong)));
+    --gradient-surface: linear-gradient(180deg, hsl(var(--card) / 0.95), hsl(var(--card)));
+    --shadow-elevated: 0 10px 30px -10px hsl(var(--primary) / 0.25);
+    --shadow-glow: 0 0 40px hsl(var(--primary-glow) / 0.35);
+    --transition-smooth: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
 }
