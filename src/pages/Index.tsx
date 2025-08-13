@@ -11,9 +11,10 @@ import ServerCombobox, { Servidor } from "@/components/ServerCombobox";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import logoTransalvador from "@/assets/logo-transalvador.png";
 
 // Tipos
-type DiaTrabalho = { data: string; horas: number };
+type DiaTrabalho = { data: string; horas: number; funcao: FuncaoID };
 
 type OperacaoTipo = "ordinaria" | "reveillon" | "carnaval";
 
@@ -23,7 +24,6 @@ type Lancamento = {
   nomeOperacao: string;
   periodo: { inicio: string; fim: string };
   servidor: Servidor;
-  funcao: FuncaoID;
   dias: DiaTrabalho[];
   createdAt: string;
 };
@@ -145,6 +145,8 @@ const Index = () => {
 
   const [servidores, setServidores] = useState<Servidor[]>(() => load<Servidor[]>("servidores", []));
   const [lancamentos, setLancamentos] = useState<Lancamento[]>(() => load<Lancamento[]>("lancamentos", []));
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [tab, setTab] = useState<string>("lancamentos");
 
   // Estado de Lançamento
   const initialYear = new Date().getFullYear();
@@ -152,9 +154,9 @@ const Index = () => {
   const [ano, setAno] = useState<number>(initialYear);
   const [operacaoId, setOperacaoId] = useState<string>(initialOps[0]?.id ?? "");
   const [periodo, setPeriodo] = useState({ inicio: initialOps[0]?.inicio ?? "", fim: initialOps[0]?.fim ?? "" });
-  const [funcao, setFuncao] = useState<FuncaoID>("coordenador");
+  
   const [matriculaSelecionada, setMatriculaSelecionada] = useState<string | undefined>(undefined);
-  const [dias, setDias] = useState<DiaTrabalho[]>([{ data: initialOps[0]?.inicio ?? "", horas: 8 }]);
+  const [dias, setDias] = useState<DiaTrabalho[]>([{ data: initialOps[0]?.inicio ?? "", horas: 8, funcao: "coordenador" }]);
 
   // Opções de operação por ano
   const opcoesOperacao = useMemo(() => buildOpcoes(ano), [ano]);
@@ -171,7 +173,7 @@ const Index = () => {
       if (first) {
         setOperacaoId(first.id);
         setPeriodo({ inicio: first.inicio, fim: first.fim });
-        setDias([{ data: first.inicio, horas: 8 }]);
+        setDias([{ data: first.inicio, horas: 8, funcao: "coordenador" }]);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -220,12 +222,34 @@ const Index = () => {
     }
   };
 
-  // Valor por hora considerando a operação
-  const valorHoraAtual = useMemo(() => {
-    let v = valoresFuncao[funcao];
-    if (selectedOp?.tipo === "reveillon") v *= 2;
+  // Helpers de cálculo e recursos
+  const valorHora = (f: FuncaoID, tipo: OperacaoTipo) => {
+    let v = valoresFuncao[f];
+    if (tipo === "reveillon") v *= 2;
     return v;
-  }, [funcao, selectedOp]);
+  };
+
+  const funcaoLabel = (f: FuncaoID) =>
+    ({
+      coordenador: "Coordenador",
+      supervisor: "Supervisor",
+      agente: "Agente de Trânsito",
+      apoio: "Apoio Administrativo",
+    }[f]);
+
+  const fetchAsDataURL = async (url: string) => {
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      return await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      return "";
+    }
+  };
 
   // Persistência
   useEffect(() => save("servidores", servidores), [servidores]);
@@ -251,13 +275,13 @@ const Index = () => {
   };
 
   // CRUD de dias
-  const adicionarDia = () => setDias((d) => [...d, { data: periodo.inicio, horas: 8 }]);
+  const adicionarDia = () => setDias((d) => [...d, { data: periodo.inicio, horas: 8, funcao: "coordenador" }]);
   const removerDia = (index: number) => setDias((d) => d.filter((_, i) => i !== index));
   const atualizarDia = (index: number, patch: Partial<DiaTrabalho>) =>
     setDias((d) => d.map((dia, i) => (i === index ? { ...dia, ...patch } : dia)));
 
-  // Salvar lançamento (com correção da validação do servidor)
-  const salvarLancamento = () => {
+  // Salvar lançamento com validações e geração de PDF
+  const salvarLancamento = async () => {
     if (!matriculaSelecionada) {
       toast({ title: "Selecione um servidor válido", description: "Use a busca para escolher um servidor.", variant: "destructive" });
       return;
@@ -274,24 +298,48 @@ const Index = () => {
       return;
     }
 
-    const nomeOperacao = selectedOp?.label ?? "";
+    // 3 - Não permitir a mesma data repetida (dentro do formulário)
+    const datas = diasValidos.map((d) => d.data);
+    const hasDup = new Set(datas).size !== datas.length;
+    if (hasDup) {
+      toast({ title: "Datas repetidas", description: "Remova dias duplicados no lançamento.", variant: "destructive" });
+      return;
+    }
 
+    // 3 - Bloquear conflito com lançamentos existentes para o mesmo servidor (qualquer operação)
+    const datasSet = new Set(datas);
+    const conflito = lancamentos.some((l) => {
+      if (editingId && l.id === editingId) return false;
+      if (l.servidor.matricula !== srv.matricula) return false;
+      return l.dias.some((d) => datasSet.has(d.data));
+    });
+    if (conflito) {
+      toast({ title: "Conflito de datas", description: "Já existe lançamento para este servidor em uma das datas informadas.", variant: "destructive" });
+      return;
+    }
+
+    const nomeOperacao = selectedOp?.label ?? "";
     const novo: Lancamento = {
-      id: crypto.randomUUID(),
+      id: editingId ?? crypto.randomUUID(),
       operacao: selectedOp?.tipo ?? "ordinaria",
       nomeOperacao,
       periodo,
       servidor: srv,
-      funcao,
       dias: diasValidos,
       createdAt: new Date().toISOString(),
     };
 
-    setLancamentos((prev) => [novo, ...prev]);
+    setLancamentos((prev) => {
+      if (editingId) return prev.map((l) => (l.id === editingId ? novo : l));
+      return [novo, ...prev];
+    });
+
     // Gerar PDF automaticamente
-    gerarFrequenciaPDF();
+    await gerarFrequenciaPDF();
+
     // reset básico
-    setDias([{ data: periodo.inicio, horas: 8 }]);
+    setEditingId(null);
+    setDias([{ data: periodo.inicio, horas: 8, funcao: "coordenador" }]);
     toast({ title: "Lançamento salvo e PDF gerado" });
   };
 
@@ -305,20 +353,21 @@ const Index = () => {
     lancamentos.forEach((l) => {
       if (filtroOperacao !== "todos" && l.nomeOperacao !== filtroOperacao) return;
 
-      const horas = l.dias.reduce((acc, d) => acc + d.horas, 0);
-      let valor = valoresFuncao[l.funcao];
-      if (l.operacao === "reveillon") valor *= 2;
-
       const key = l.servidor.matricula;
       if (!map.has(key)) {
         map.set(key, { matricula: key, nome: l.servidor.nome, coordenador: 0, supervisor: 0, agente: 0, apoio: 0, totalHoras: 0, valorHoras: 0, alimentacao: 0, transporte: 0, totalGeral: 0 });
       }
       const row = map.get(key)!;
-      row[l.funcao] += horas as number;
-      row.totalHoras += horas;
-      row.valorHoras += horas * valor;
-      l.dias.forEach((d) => { if (d.horas >= 8) row.alimentacao += 2 * d.horas; });
-      if (l.operacao === "carnaval") row.transporte += 20; // exemplo
+
+      l.dias.forEach((d) => {
+        const v = valorHora(d.funcao, l.operacao);
+        row[d.funcao] += d.horas;
+        row.totalHoras += d.horas;
+        row.valorHoras += d.horas * v;
+        if (d.horas >= 8) row.alimentacao += 2 * d.horas;
+      });
+
+      if (l.operacao === "carnaval") row.transporte += 20; // exemplo por lançamento
       row.totalGeral = row.valorHoras + row.alimentacao + row.transporte;
     });
 
@@ -330,7 +379,7 @@ const Index = () => {
   }, [lancamentos]);
 
   // PDFs
-  const gerarFrequenciaPDF = () => {
+  const gerarFrequenciaPDF = async () => {
     if (!matriculaSelecionada) {
       toast({ title: "Selecione um servidor válido", variant: "destructive" });
       return;
@@ -342,6 +391,13 @@ const Index = () => {
     }
 
     const doc = new jsPDF();
+
+    // Logo
+    const logoData = await fetchAsDataURL(logoTransalvador);
+    if (logoData) {
+      (doc as any).addImage(logoData, "PNG", 14, 10, 20, 20);
+    }
+
     (doc as any).setFontSize(16);
     doc.text("TRANSALVADOR", 105, 15, { align: "center" } as any);
     (doc as any).setFontSize(12);
@@ -356,32 +412,31 @@ const Index = () => {
     doc.text(`Servidor: ${srv.nome}`, 20, 59);
     doc.text(`Matrícula: ${srv.matricula}`, 20, 66);
     doc.text(`CPF: ${formatarCPF(srv.cpf)}`, 20, 73);
-    doc.text(`Função: ${funcao.charAt(0).toUpperCase() + funcao.slice(1)}`, 20, 80);
 
-    const rows = dias
-      .filter((d) => d.data && d.horas > 0)
-      .map((d) => {
-        const vHora = valorHoraAtual;
-        const valorTotal = d.horas * vHora;
-        const alimentacao = d.horas >= 8 ? d.horas * 2 : 0;
-        return [
-          d.data,
-          d.horas,
-          `R$ ${vHora.toFixed(2)}`,
-          `R$ ${valorTotal.toFixed(2)}`,
-          `R$ ${alimentacao.toFixed(2)}`,
-          "",
-        ];
-      });
-
-    if (rows.length === 0) {
+    const ordered = [...dias].filter((d) => d.data && d.horas > 0).sort((a, b) => a.data.localeCompare(b.data));
+    if (ordered.length === 0) {
       toast({ title: "Adicione pelo menos um dia", variant: "destructive" });
       return;
     }
 
+    const rows = ordered.map((d) => {
+      const vHora = valorHora(d.funcao, selectedOp?.tipo ?? "ordinaria");
+      const valorTotal = d.horas * vHora;
+      const alimentacao = d.horas >= 8 ? d.horas * 2 : 0;
+      return [
+        d.data,
+        d.horas,
+        funcaoLabel(d.funcao),
+        `R$ ${vHora.toFixed(2)}`,
+        `R$ ${valorTotal.toFixed(2)}`,
+        `R$ ${alimentacao.toFixed(2)}`,
+        "",
+      ];
+    });
+
     autoTable(doc, {
       startY: 85,
-      head: [["Data", "Horas", "Valor/Hora", "Valor Total", "Alimentação", "Assinatura"]],
+      head: [["Data", "Horas", "Função", "Valor/Hora", "Valor Total", "Alimentação", "Assinatura"]],
       body: rows,
       styles: { fontSize: 10 },
     });
@@ -396,12 +451,18 @@ const Index = () => {
     toast({ title: "Frequência gerada" });
   };
 
-  const gerarPlanilhaPDF = () => {
+  const gerarPlanilhaPDF = async () => {
     if (consolidado.length === 0) {
       toast({ title: "Nenhum dado para exportar", variant: "destructive" });
       return;
     }
     const doc = new jsPDF({ orientation: "landscape" });
+
+    const logoData = await fetchAsDataURL(logoTransalvador);
+    if (logoData) {
+      (doc as any).addImage(logoData, "PNG", 20, 10, 24, 24);
+    }
+
     doc.setFontSize(16);
     doc.text("TRANSALVADOR", 148, 15, { align: "center" } as any);
     doc.setFontSize(12);
@@ -428,19 +489,21 @@ const Index = () => {
       "Total Geral",
     ];
 
-    const rows = consolidado.map((r) => [
-      r.matricula,
-      r.nome,
-      r.coordenador.toFixed(2),
-      r.supervisor.toFixed(2),
-      r.agente.toFixed(2),
-      r.apoio.toFixed(2),
-      r.totalHoras.toFixed(2),
-      `R$ ${r.valorHoras.toFixed(2)}`,
-      `R$ ${r.alimentacao.toFixed(2)}`,
-      r.transporte > 0 ? `R$ ${r.transporte.toFixed(2)}` : '-',
-      `R$ ${r.totalGeral.toFixed(2)}`,
-    ]);
+    const rows = [...consolidado]
+      .sort((a, b) => a.nome.localeCompare(b.nome))
+      .map((r) => [
+        r.matricula,
+        r.nome,
+        r.coordenador.toFixed(2),
+        r.supervisor.toFixed(2),
+        r.agente.toFixed(2),
+        r.apoio.toFixed(2),
+        r.totalHoras.toFixed(2),
+        `R$ ${r.valorHoras.toFixed(2)}`,
+        `R$ ${r.alimentacao.toFixed(2)}`,
+        r.transporte > 0 ? `R$ ${r.transporte.toFixed(2)}` : '-',
+        `R$ ${r.totalGeral.toFixed(2)}`,
+      ]);
 
     autoTable(doc, {
       startY: 50,
@@ -536,6 +599,30 @@ const Index = () => {
     XLSX.writeFile(wb, nomeArquivo);
     toast({ title: "Planilha Excel gerada" });
   };
+
+  const zerarLancamentos = () => {
+    setLancamentos([]);
+    localStorage.removeItem("lancamentos");
+    toast({ title: "Lançamentos zerados", description: "Banco de servidores preservado." });
+  };
+
+  const excluirLancamento = (id: string) => {
+    setLancamentos((prev) => prev.filter((l) => l.id !== id));
+    toast({ title: "Lançamento excluído" });
+  };
+
+  const editarLancamento = (l: Lancamento) => {
+    setEditingId(l.id);
+    const y = new Date(l.periodo.inicio).getFullYear();
+    setAno(y);
+    const op = buildOpcoes(y).find((o) => o.inicio === l.periodo.inicio && o.fim === l.periodo.fim && o.tipo === l.operacao);
+    if (op) setOperacaoId(op.id);
+    setPeriodo(l.periodo);
+    setMatriculaSelecionada(l.servidor.matricula);
+    setDias(l.dias);
+    setTab("lancamentos");
+    toast({ title: "Editando lançamento", description: `${l.servidor.nome} - ${l.nomeOperacao}` });
+  };
   return (
     <div className="min-h-screen">
       <header className="border-b bg-gradient-to-br from-background to-card/60">
@@ -546,11 +633,12 @@ const Index = () => {
       </header>
 
       <main className="container py-8">
-        <Tabs defaultValue="lancamentos" className="w-full">
-          <TabsList className="grid grid-cols-3 w-full">
+        <Tabs value={tab} onValueChange={setTab} className="w-full">
+          <TabsList className="grid grid-cols-4 w-full">
             <TabsTrigger value="rh">Banco de Dados (RH)</TabsTrigger>
             <TabsTrigger value="lancamentos">Lançamentos</TabsTrigger>
             <TabsTrigger value="planilha">Planilha</TabsTrigger>
+            <TabsTrigger value="logs">Logs</TabsTrigger>
           </TabsList>
 
           {/* RH */}
@@ -603,7 +691,28 @@ const Index = () => {
                   <CardTitle>Ajuda</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm text-muted-foreground">Use o botão de teste para popular a base. A importação por Excel está disponível acima.</p>
+                  <ol className="list-decimal list-inside space-y-1 text-sm text-muted-foreground">
+                    <li>Importe a base de servidores (Excel) na aba RH.</li>
+                    <li>Vá em Lançamentos: escolha Ano e Operação (período é definido automaticamente).</li>
+                    <li>Selecione o servidor e adicione os dias, horas e a função de cada dia.</li>
+                    <li>Salve o lançamento para gerar a Frequência em PDF (assinar).</li>
+                    <li>Na aba Planilha, exporte o consolidado em PDF ou Excel.</li>
+                    <li>Use a aba Logs para editar ou excluir lançamentos; a planilha é atualizada.</li>
+                  </ol>
+                  <div className="text-xs text-muted-foreground mt-3">
+                    Observações: não é permitido dois lançamentos na mesma data para o mesmo servidor; o servidor pode ter funções diferentes em dias distintos da mesma operação.
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sobre</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm">GEOP - Gerador de Operações Especiais.</p>
+                  <p className="text-sm">Desenvolvido por Rui Cezar Pereira da Paixão Junior</p>
+                  <p className="text-sm">Salvador, 2025.</p>
                 </CardContent>
               </Card>
             </div>
@@ -638,7 +747,7 @@ const Index = () => {
                         const op = opcoesOperacao.find((o) => o.id === v);
                         if (op) {
                           setPeriodo({ inicio: op.inicio, fim: op.fim });
-                          setDias((d) => (d.length === 0 ? [{ data: op.inicio, horas: 8 }] : d));
+                          setDias((d) => (d.length === 0 ? [{ data: op.inicio, horas: 8, funcao: "coordenador" }] : d));
                         }
                       }}
                     >
@@ -674,19 +783,6 @@ const Index = () => {
                     )}
                   </div>
 
-                  <div className="space-y-2">
-                    <Label>Função na Operação</Label>
-                    <Select value={funcao} onValueChange={(v: FuncaoID) => setFuncao(v)}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent className="z-50">
-                        <SelectItem value="coordenador">Coordenador</SelectItem>
-                        <SelectItem value="supervisor">Supervisor</SelectItem>
-                        <SelectItem value="agente">Agente de Trânsito</SelectItem>
-                        <SelectItem value="apoio">Apoio Administrativo</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <div className="text-sm font-medium">Valor por hora: R$ {valorHoraAtual.toFixed(2)}</div>
-                  </div>
                 </CardContent>
               </Card>
 
@@ -710,7 +806,18 @@ const Index = () => {
                         }}
                         className="w-24"
                       />
-                      <span className="text-sm">horas</span>
+                      <Select value={d.funcao} onValueChange={(v: FuncaoID) => atualizarDia(i, { funcao: v })}>
+                        <SelectTrigger className="w-56"><SelectValue placeholder="Função" /></SelectTrigger>
+                        <SelectContent className="z-50">
+                          <SelectItem value="coordenador">Coordenador</SelectItem>
+                          <SelectItem value="supervisor">Supervisor</SelectItem>
+                          <SelectItem value="agente">Agente de Trânsito</SelectItem>
+                          <SelectItem value="apoio">Apoio Administrativo</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <div className="text-sm whitespace-nowrap">
+                        Valor/h: R$ {valorHora(d.funcao, selectedOp?.tipo ?? "ordinaria").toFixed(2)}
+                      </div>
                       <div className="ms-auto flex gap-2">
                         <Button variant="secondary" onClick={() => atualizarDia(i, { horas: d.horas + 1 })}>+1h</Button>
                         <Button variant="destructive" onClick={() => removerDia(i)}>Remover</Button>
@@ -752,6 +859,7 @@ const Index = () => {
                 <div className="flex gap-2 mb-4">
                   <Button onClick={gerarPlanilhaPDF}>Exportar PDF</Button>
                   <Button variant="secondary" onClick={exportarPlanilhaExcel}>Exportar Excel</Button>
+                  <Button variant="destructive" onClick={zerarLancamentos}>Zerar Dados</Button>
                 </div>
 
                 <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
@@ -790,6 +898,51 @@ const Index = () => {
                           <TableCell>R$ {r.alimentacao.toFixed(2)}</TableCell>
                           <TableCell>{r.transporte > 0 ? `R$ ${r.transporte.toFixed(2)}` : '-'}</TableCell>
                           <TableCell>R$ {r.totalGeral.toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Logs */}
+          <TabsContent value="logs" className="mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Logs de Lançamentos</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Data</TableHead>
+                        <TableHead>Servidor</TableHead>
+                        <TableHead>Operação</TableHead>
+                        <TableHead>Período</TableHead>
+                        <TableHead>Dias</TableHead>
+                        <TableHead>Ações</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {lancamentos.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center text-muted-foreground">Sem lançamentos.</TableCell>
+                        </TableRow>
+                      )}
+                      {[...lancamentos].sort((a,b)=>a.servidor.nome.localeCompare(b.servidor.nome)).map((l) => (
+                        <TableRow key={l.id}>
+                          <TableCell>{new Date(l.createdAt).toLocaleDateString()}</TableCell>
+                          <TableCell>{l.servidor.nome} ({l.servidor.matricula})</TableCell>
+                          <TableCell>{l.nomeOperacao}</TableCell>
+                          <TableCell>{l.periodo.inicio} a {l.periodo.fim}</TableCell>
+                          <TableCell>{l.dias.length}</TableCell>
+                          <TableCell className="flex gap-2">
+                            <Button size="sm" onClick={() => editarLancamento(l)}>Editar</Button>
+                            <Button size="sm" variant="destructive" onClick={() => excluirLancamento(l.id)}>Excluir</Button>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
