@@ -44,6 +44,14 @@ type OpItem = { id: string; label: string; inicio: string; fim: string; tipo: Op
 const pad2 = (n: number) => n.toString().padStart(2, "0");
 const toISO = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
+// Formatações BR
+const toBR = (iso: string) => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+};
+const fmtBRL = (n: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n);
+const clampToPeriodo = (dateIso: string, inicio: string, fim: string) => (dateIso < inicio ? inicio : dateIso > fim ? fim : dateIso);
 // Páscoa (Meeus/Jones/Butcher)
 const easterSunday = (year: number) => {
   const a = year % 19;
@@ -140,7 +148,7 @@ const save = (key: string, value: unknown) => localStorage.setItem(key, JSON.str
 const Index = () => {
   // SEO básico
   useEffect(() => {
-    document.title = "Sistema de Operações Especiais - TRANSALVADOR";
+    document.title = "GEOPS - Gerador de Operação Especial Segep";
   }, []);
 
   const [servidores, setServidores] = useState<Servidor[]>(() => load<Servidor[]>("servidores", []));
@@ -158,6 +166,21 @@ const Index = () => {
   const [matriculaSelecionada, setMatriculaSelecionada] = useState<string | undefined>(undefined);
   const [dias, setDias] = useState<DiaTrabalho[]>([{ data: initialOps[0]?.inicio ?? "", horas: 8, funcao: "coordenador" }]);
 
+  // Administração (Banco de Dados)
+  const [adminUser, setAdminUser] = useState<string>(() => load<string>("adminUser", "RCPPJ"));
+  const [adminPass, setAdminPass] = useState<string>(() => load<string>("adminPass", "ruicpj@123"));
+  const [adminLogged, setAdminLogged] = useState<boolean>(() => load<boolean>("adminLogged", false));
+  const [contatos, setContatos] = useState<{ telefone1: string; telefone2: string }>(() => load("contatosSetor", { telefone1: "", telefone2: "" }));
+  const SECURITY_QUESTION = "Omae wa mou shindeiru";
+  const SECURITY_ANSWER = "Nani?";
+
+  // Estados locais do painel de acesso
+  const [loginUsuario, setLoginUsuario] = useState("");
+  const [loginSenha, setLoginSenha] = useState("");
+  const [novaSenha, setNovaSenha] = useState("");
+  const [confirmarSenha, setConfirmarSenha] = useState("");
+  const [respostaSeguranca, setRespostaSeguranca] = useState("");
+  const [novaSenhaSeguranca, setNovaSenhaSeguranca] = useState("");
   // Opções de operação por ano
   const opcoesOperacao = useMemo(() => buildOpcoes(ano), [ano]);
   const selectedOp = useMemo(() => opcoesOperacao.find((o) => o.id === operacaoId), [opcoesOperacao, operacaoId]);
@@ -193,6 +216,10 @@ const Index = () => {
     return s.length === 11 ? s.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4") : cpf;
   };
   const importarExcel = async () => {
+    if (!adminLogged) {
+      toast({ title: "Acesso restrito", description: "Somente administrador pode importar a base.", variant: "destructive" });
+      return;
+    }
     if (!excelFile) {
       toast({ title: "Selecione um arquivo Excel", variant: "destructive" });
       return;
@@ -254,9 +281,17 @@ const Index = () => {
   // Persistência
   useEffect(() => save("servidores", servidores), [servidores]);
   useEffect(() => save("lancamentos", lancamentos), [lancamentos]);
+  useEffect(() => save("adminUser", adminUser), [adminUser]);
+  useEffect(() => save("adminPass", adminPass), [adminPass]);
+  useEffect(() => save("adminLogged", adminLogged), [adminLogged]);
+  useEffect(() => save("contatosSetor", contatos), [contatos]);
 
   // Dados de teste
   const carregarDadosTeste = () => {
+    if (!adminLogged) {
+      toast({ title: "Acesso restrito", description: "Somente administrador pode carregar dados.", variant: "destructive" });
+      return;
+    }
     const demoServidores: Servidor[] = [
       { matricula: "001", nome: "João Silva", cpf: "11111111111", cargo: "Coordenador" },
       { matricula: "002", nome: "Maria Souza", cpf: "22222222222", cargo: "Supervisor" },
@@ -267,6 +302,10 @@ const Index = () => {
   };
 
   const limparTudo = () => {
+    if (!adminLogged) {
+      toast({ title: "Acesso restrito", description: "Somente administrador pode limpar a base.", variant: "destructive" });
+      return;
+    }
     setServidores([]);
     setLancamentos([]);
     localStorage.removeItem("servidores");
@@ -315,6 +354,13 @@ const Index = () => {
     });
     if (conflito) {
       toast({ title: "Conflito de datas", description: "Já existe lançamento para este servidor em uma das datas informadas.", variant: "destructive" });
+      return;
+    }
+
+    // 4 - Restringir datas ao período da operação selecionada
+    const foraPeriodo = diasValidos.find((d) => d.data < periodo.inicio || d.data > periodo.fim);
+    if (foraPeriodo) {
+      toast({ title: "Data fora do período", description: "Há dias fora do período da operação selecionada.", variant: "destructive" });
       return;
     }
 
@@ -408,7 +454,7 @@ const Index = () => {
     const nomeOp = selectedOp?.label ?? "";
     doc.setFontSize(10);
     doc.text(`Operação: ${nomeOp}`, 20, 45);
-    doc.text(`Período: ${periodo.inicio} a ${periodo.fim}`, 20, 52);
+    doc.text(`Período: ${toBR(periodo.inicio)} a ${toBR(periodo.fim)}`, 20, 52);
     doc.text(`Servidor: ${srv.nome}`, 20, 59);
     doc.text(`Matrícula: ${srv.matricula}`, 20, 66);
     doc.text(`CPF: ${formatarCPF(srv.cpf)}`, 20, 73);
@@ -424,12 +470,12 @@ const Index = () => {
       const valorTotal = d.horas * vHora;
       const alimentacao = d.horas >= 8 ? d.horas * 2 : 0;
       return [
-        d.data,
+        toBR(d.data),
         d.horas,
         funcaoLabel(d.funcao),
-        `R$ ${vHora.toFixed(2)}`,
-        `R$ ${valorTotal.toFixed(2)}`,
-        `R$ ${alimentacao.toFixed(2)}`,
+        fmtBRL(vHora),
+        fmtBRL(valorTotal),
+        fmtBRL(alimentacao),
         "",
       ];
     });
@@ -499,10 +545,10 @@ const Index = () => {
         r.agente.toFixed(2),
         r.apoio.toFixed(2),
         r.totalHoras.toFixed(2),
-        `R$ ${r.valorHoras.toFixed(2)}`,
-        `R$ ${r.alimentacao.toFixed(2)}`,
-        r.transporte > 0 ? `R$ ${r.transporte.toFixed(2)}` : '-',
-        `R$ ${r.totalGeral.toFixed(2)}`,
+        fmtBRL(r.valorHoras),
+        fmtBRL(r.alimentacao),
+        r.transporte > 0 ? fmtBRL(r.transporte) : '-',
+        fmtBRL(r.totalGeral),
       ]);
 
     autoTable(doc, {
@@ -556,19 +602,21 @@ const Index = () => {
       "Transporte",
       "Total Geral",
     ];
-    const rows = consolidado.map((r) => [
-      r.matricula,
-      r.nome,
-      Number(r.coordenador.toFixed(2)),
-      Number(r.supervisor.toFixed(2)),
-      Number(r.agente.toFixed(2)),
-      Number(r.apoio.toFixed(2)),
-      Number(r.totalHoras.toFixed(2)),
-      Number(r.valorHoras.toFixed(2)),
-      Number(r.alimentacao.toFixed(2)),
-      Number(r.transporte.toFixed(2)),
-      Number(r.totalGeral.toFixed(2)),
-    ]);
+    const rows = [...consolidado]
+      .sort((a, b) => a.nome.localeCompare(b.nome))
+      .map((r) => [
+        r.matricula,
+        r.nome,
+        Number(r.coordenador.toFixed(2)),
+        Number(r.supervisor.toFixed(2)),
+        Number(r.agente.toFixed(2)),
+        Number(r.apoio.toFixed(2)),
+        Number(r.totalHoras.toFixed(2)),
+        Number(r.valorHoras.toFixed(2)),
+        Number(r.alimentacao.toFixed(2)),
+        Number(r.transporte.toFixed(2)),
+        Number(r.totalGeral.toFixed(2)),
+      ]);
     const totals = consolidado.reduce(
       (acc, r) => {
         acc.h += r.totalHoras;
@@ -627,7 +675,7 @@ const Index = () => {
     <div className="min-h-screen">
       <header className="border-b bg-gradient-to-br from-background to-card/60">
         <div className="container py-8">
-          <h1 className="text-3xl font-bold tracking-tight">Sistema de Operações Especiais – TRANSALVADOR</h1>
+          <h1 className="text-3xl font-bold tracking-tight">GEOPS - Gerador de Operação Especial Segep</h1>
           <p className="text-muted-foreground mt-1">Lançamentos rápidos, seleção inteligente de servidores e consolidação clara.</p>
         </div>
       </header>
@@ -650,11 +698,14 @@ const Index = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="flex gap-2 mb-4 flex-wrap items-center">
-                    <Input type="file" accept=".xlsx,.xls" onChange={(e) => setExcelFile(e.target.files?.[0] ?? null)} className="max-w-xs" />
-                    <Button onClick={importarExcel}>Importar Excel</Button>
-                    <Button onClick={carregarDadosTeste}>Carregar dados de teste</Button>
-                    <Button variant="secondary" onClick={limparTudo}>Limpar tudo</Button>
+                    <Input type="file" accept=".xlsx,.xls" onChange={(e) => setExcelFile(e.target.files?.[0] ?? null)} className="max-w-xs" disabled={!adminLogged} />
+                    <Button onClick={importarExcel} disabled={!adminLogged}>Importar Excel</Button>
+                    <Button onClick={carregarDadosTeste} disabled={!adminLogged}>Carregar dados de teste</Button>
+                    <Button variant="secondary" onClick={limparTudo} disabled={!adminLogged}>Limpar tudo</Button>
                   </div>
+                  {!adminLogged && (
+                    <div className="text-xs text-muted-foreground mb-3">Apenas o administrador pode alterar os dados do banco.</div>
+                  )}
 
                   <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
                     <Table>
@@ -709,10 +760,25 @@ const Index = () => {
                 <CardHeader>
                   <CardTitle>Sobre</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <p className="text-sm">GEOP - Gerador de Operações Especiais.</p>
+                <CardContent className="space-y-3">
+                  <p className="text-sm">GEOPS - Gerador de Operação Especial Segep.</p>
                   <p className="text-sm">Desenvolvido por Rui Cezar Pereira da Paixão Junior</p>
                   <p className="text-sm">Salvador, 2025.</p>
+
+                  <div className="grid md:grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label>Telefone principal</Label>
+                      <Input value={contatos.telefone1} onChange={(e)=>setContatos((c)=>({...c, telefone1: e.target.value}))} placeholder="(71) 9 0000-0000" disabled={!adminLogged} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Telefone secundário</Label>
+                      <Input value={contatos.telefone2} onChange={(e)=>setContatos((c)=>({...c, telefone2: e.target.value}))} placeholder="(71) 9 0000-0000" disabled={!adminLogged} />
+                    </div>
+                  </div>
+                  <Button onClick={()=>toast({ title: "Contatos atualizados" })} disabled={!adminLogged}>Salvar Contatos</Button>
+                  {!adminLogged && (
+                    <div className="text-xs text-muted-foreground">Faça login no painel de acesso para editar os telefones.</div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -761,11 +827,8 @@ const Index = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Período</Label>
-                    <div className="flex gap-2">
-                      <Input type="date" value={periodo.inicio} onChange={(e) => setPeriodo((p) => ({ ...p, inicio: e.target.value }))} />
-                      <Input type="date" value={periodo.fim} onChange={(e) => setPeriodo((p) => ({ ...p, fim: e.target.value }))} />
-                    </div>
+                    <Label>Período (definido pela operação)</Label>
+                    <div className="text-sm text-muted-foreground">{toBR(periodo.inicio)} a {toBR(periodo.fim)}</div>
                   </div>
 
                   <div className="space-y-2">
@@ -793,7 +856,15 @@ const Index = () => {
                 <CardContent className="space-y-4">
                   {dias.map((d, i) => (
                     <div key={i} className="flex items-center gap-2 border rounded-md p-3">
-                      <Input type="date" value={d.data} onChange={(e) => atualizarDia(i, { data: e.target.value })} className="max-w-[220px]" />
+                      <Input type="date" value={d.data} onChange={(e) => {
+                        const v = e.target.value;
+                        if (v < periodo.inicio || v > periodo.fim) {
+                          toast({ title: "Data fora do período", variant: "destructive" });
+                          atualizarDia(i, { data: clampToPeriodo(v, periodo.inicio, periodo.fim) });
+                        } else {
+                          atualizarDia(i, { data: v });
+                        }
+                      }} className="max-w-[220px]" />
                       <Input
                         type="number"
                         min={1}
@@ -934,10 +1005,10 @@ const Index = () => {
                       )}
                       {[...lancamentos].sort((a,b)=>a.servidor.nome.localeCompare(b.servidor.nome)).map((l) => (
                         <TableRow key={l.id}>
-                          <TableCell>{new Date(l.createdAt).toLocaleDateString()}</TableCell>
+                          <TableCell>{new Date(l.createdAt).toLocaleDateString('pt-BR')}</TableCell>
                           <TableCell>{l.servidor.nome} ({l.servidor.matricula})</TableCell>
                           <TableCell>{l.nomeOperacao}</TableCell>
-                          <TableCell>{l.periodo.inicio} a {l.periodo.fim}</TableCell>
+                          <TableCell>{toBR(l.periodo.inicio)} a {toBR(l.periodo.fim)}</TableCell>
                           <TableCell>{l.dias.length}</TableCell>
                           <TableCell className="flex gap-2">
                             <Button size="sm" onClick={() => editarLancamento(l)}>Editar</Button>
