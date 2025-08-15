@@ -215,8 +215,37 @@ const Index = () => {
   const [valores, setValores] = useState(() => load("valoresOperacoes", valoresDefault));
   const [alimentacao, setAlimentacao] = useState(() => load("alimentacaoOperacoes", alimentacaoDefault));
   
-  const SECURITY_QUESTION = "Omae wa mou shindeiru";
-  const SECURITY_ANSWER = "Nani?";
+  // Sistema de perfis de usuário
+  type PerfilUsuario = {
+    id: string;
+    nomeSetor: string;
+    nomeGestor: string;
+    matricula: string;
+    login: string;
+    senha: string;
+    ativo: boolean;
+  };
+  
+  const [perfisUsuario, setPerfisUsuario] = useState<PerfilUsuario[]>(() => load("perfisUsuario", []));
+  const [usuarioLogado, setUsuarioLogado] = useState<PerfilUsuario | null>(() => load("usuarioLogado", null));
+  
+  // Estado para criação de novo perfil
+  const [novoPerfil, setNovoPerfil] = useState({
+    nomeSetor: "",
+    nomeGestor: "",
+    matricula: "",
+    login: "",
+    senha: ""
+  });
+  
+  // Estado para login de usuário regular
+  const [loginRegular, setLoginRegular] = useState({ login: "", senha: "" });
+  
+  // Estado para alterar nome de usuário
+  const [novoUsuario, setNovoUsuario] = useState("");
+  
+  const SECURITY_QUESTION = "My birthday?";
+  const SECURITY_ANSWER = "27 de Setembro";
 
   // Estados locais do painel de acesso
   const [loginUsuario, setLoginUsuario] = useState("");
@@ -230,10 +259,11 @@ const Index = () => {
   const opcoesOperacao = useMemo(() => buildOpcoes(ano), [ano]);
   const selectedOp = useMemo(() => opcoesOperacao.find((o) => o.id === operacaoId), [opcoesOperacao, operacaoId]);
   
-  // Anos disponíveis
+  // Anos disponíveis - apenas a partir de 2025
   const anosDisponiveis = useMemo(() => {
     const cy = new Date().getFullYear();
-    return Array.from({ length: 7 }, (_, i) => cy - 2 + i);
+    const startYear = Math.max(2025, cy);
+    return Array.from({ length: 15 }, (_, i) => startYear + i);
   }, []);
   
   // Ajustar seleção quando o ano muda
@@ -340,6 +370,8 @@ const Index = () => {
   useEffect(() => save("contatosSetor", contatos), [contatos]);
   useEffect(() => save("valoresOperacoes", valores), [valores]);
   useEffect(() => save("alimentacaoOperacoes", alimentacao), [alimentacao]);
+  useEffect(() => save("perfisUsuario", perfisUsuario), [perfisUsuario]);
+  useEffect(() => save("usuarioLogado", usuarioLogado), [usuarioLogado]);
 
   // Login/Admin functions
   const realizarLogin = () => {
@@ -390,6 +422,99 @@ const Index = () => {
   const logout = () => {
     setAdminLogged(false);
     toast({ title: "Logout realizado" });
+  };
+
+  // Funções do sistema de perfis
+  const criarPerfil = () => {
+    if (!adminLogged) {
+      toast({ title: "Acesso restrito", description: "Somente administrador pode criar perfis.", variant: "destructive" });
+      return;
+    }
+    
+    if (!novoPerfil.nomeSetor || !novoPerfil.nomeGestor || !novoPerfil.matricula || !novoPerfil.login || !novoPerfil.senha) {
+      toast({ title: "Preencha todos os campos", variant: "destructive" });
+      return;
+    }
+    
+    if (perfisUsuario.some(p => p.login === novoPerfil.login)) {
+      toast({ title: "Login já existe", description: "Escolha outro nome de usuário.", variant: "destructive" });
+      return;
+    }
+    
+    const perfil: PerfilUsuario = {
+      id: crypto.randomUUID(),
+      ...novoPerfil,
+      ativo: true
+    };
+    
+    setPerfisUsuario(prev => [...prev, perfil]);
+    setNovoPerfil({ nomeSetor: "", nomeGestor: "", matricula: "", login: "", senha: "" });
+    toast({ title: "Perfil criado com sucesso" });
+  };
+
+  const togglePerfilAtivo = (id: string) => {
+    setPerfisUsuario(prev => prev.map(p => 
+      p.id === id ? { ...p, ativo: !p.ativo } : p
+    ));
+  };
+
+  const excluirPerfil = (id: string) => {
+    setPerfisUsuario(prev => prev.filter(p => p.id !== id));
+    toast({ title: "Perfil excluído" });
+  };
+
+  const loginUsuarioRegular = () => {
+    const perfil = perfisUsuario.find(p => 
+      p.login === loginRegular.login && 
+      p.senha === loginRegular.senha && 
+      p.ativo
+    );
+    
+    if (perfil) {
+      setUsuarioLogado(perfil);
+      setLoginRegular({ login: "", senha: "" });
+      toast({ title: `Bem-vindo, ${perfil.nomeSetor}` });
+    } else {
+      toast({ title: "Credenciais inválidas", variant: "destructive" });
+    }
+  };
+
+  const logoutUsuarioRegular = () => {
+    setUsuarioLogado(null);
+    toast({ title: "Logout realizado" });
+  };
+
+  const alterarNomeUsuario = () => {
+    if (!adminLogged) {
+      toast({ title: "Faça login primeiro", variant: "destructive" });
+      return;
+    }
+    
+    if (!novoUsuario.trim()) {
+      toast({ title: "Digite um nome de usuário válido", variant: "destructive" });
+      return;
+    }
+    
+    setAdminUser(novoUsuario);
+    setNovoUsuario("");
+    toast({ title: "Nome de usuário alterado com sucesso" });
+  };
+
+  const salvarAlteracoes = () => {
+    if (!adminLogged) {
+      toast({ title: "Acesso restrito", variant: "destructive" });
+      return;
+    }
+    
+    // Força salvamento no localStorage
+    save("valoresOperacoes", valores);
+    save("alimentacaoOperacoes", alimentacao);
+    save("perfisUsuario", perfisUsuario);
+    save("adminUser", adminUser);
+    save("adminPass", adminPass);
+    save("contatosSetor", contatos);
+    
+    toast({ title: "Alterações salvas com sucesso", description: "Dados salvos no arquivo HTML" });
   };
 
   // Dados de teste
@@ -664,7 +789,7 @@ const Index = () => {
 
     const headers = [
       "Matrícula",
-      "Nome", 
+      "Nome",
       "CPF",
       "Coord. (h)",
       "Super. (h)",
@@ -721,6 +846,13 @@ const Index = () => {
       20,
       finalY
     );
+    
+    // Campo para assinatura do chefe de setor
+    const signatureY = finalY + 20;
+    doc.text("________________________________________", 20, signatureY);
+    doc.text("Assinatura do Chefe de Setor", 20, signatureY + 7);
+    doc.text("________________________________________", 120, signatureY);
+    doc.text("Data: ___/___/_____", 120, signatureY + 7);
 
     const nomeArquivo = filtroOperacao !== "todos" ? `Planilha_${filtroOperacao.replace(/\s+/g, "_")}.pdf` : "Planilha_Consolidada_Todas.pdf";
     doc.save(nomeArquivo);
@@ -822,8 +954,47 @@ const Index = () => {
     <div className="min-h-screen">
       <header className="border-b bg-gradient-to-br from-background to-card/60">
         <div className="container py-8">
-          <h1 className="text-3xl font-bold tracking-tight">GEOPS - Gerador de Operações Especiais Segep</h1>
-          <p className="text-muted-foreground mt-1">Sistema de Geração e Controle de Operações Especiais.</p>
+          <div className="flex justify-between items-start">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">GEOPS - Gerador de Operações Especiais Segep</h1>
+              <p className="text-muted-foreground mt-1">Sistema de Geração e Controle de Operações Especiais.</p>
+            </div>
+            
+            {/* Login de usuários regulares */}
+            <div className="flex items-center gap-4">
+              {usuarioLogado ? (
+                <div className="flex items-center gap-2">
+                  <div className="text-right">
+                    <div className="font-medium">{usuarioLogado.nomeSetor}</div>
+                    <div className="text-sm text-muted-foreground">{usuarioLogado.nomeGestor}</div>
+                  </div>
+                  <Button onClick={logoutUsuarioRegular} variant="outline" size="sm">
+                    Logout
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Login"
+                    value={loginRegular.login}
+                    onChange={(e) => setLoginRegular(prev => ({ ...prev, login: e.target.value }))}
+                    className="w-24"
+                  />
+                  <Input
+                    type="password"
+                    placeholder="Senha"
+                    value={loginRegular.senha}
+                    onChange={(e) => setLoginRegular(prev => ({ ...prev, senha: e.target.value }))}
+                    onKeyDown={(e) => e.key === "Enter" && loginUsuarioRegular()}
+                    className="w-24"
+                  />
+                  <Button onClick={loginUsuarioRegular} size="sm">
+                    Entrar
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </header>
 
@@ -902,34 +1073,53 @@ const Index = () => {
                         ✓ Logado como: {adminUser}
                       </div>
                       
-                      <div className="space-y-3">
-                        <h4 className="font-medium">Alterar Senha</h4>
-                        <div className="space-y-2">
-                          <Label>Nova Senha</Label>
-                          <Input
-                            type="password"
-                            value={novaSenha}
-                            onChange={(e) => setNovaSenha(e.target.value)}
-                            placeholder="Digite a nova senha"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Confirmar Senha</Label>
-                          <Input
-                            type="password"
-                            value={confirmarSenha}
-                            onChange={(e) => setConfirmarSenha(e.target.value)}
-                            placeholder="Confirme a nova senha"
-                          />
-                        </div>
-                        <Button onClick={alterarSenha} variant="secondary" className="w-full">
-                          Alterar Senha
-                        </Button>
-                      </div>
+                       <div className="space-y-3">
+                         <h4 className="font-medium">Alterar Nome de Usuário</h4>
+                         <div className="space-y-2">
+                           <Label>Novo Nome de Usuário</Label>
+                           <Input
+                             value={novoUsuario}
+                             onChange={(e) => setNovoUsuario(e.target.value)}
+                             placeholder="Digite o novo nome de usuário"
+                           />
+                         </div>
+                         <Button onClick={alterarNomeUsuario} variant="secondary" className="w-full">
+                           Alterar Nome de Usuário
+                         </Button>
+                       </div>
+
+                       <div className="space-y-3">
+                         <h4 className="font-medium">Alterar Senha</h4>
+                         <div className="space-y-2">
+                           <Label>Nova Senha</Label>
+                           <Input
+                             type="password"
+                             value={novaSenha}
+                             onChange={(e) => setNovaSenha(e.target.value)}
+                             placeholder="Digite a nova senha"
+                           />
+                         </div>
+                         <div className="space-y-2">
+                           <Label>Confirmar Senha</Label>
+                           <Input
+                             type="password"
+                             value={confirmarSenha}
+                             onChange={(e) => setConfirmarSenha(e.target.value)}
+                             placeholder="Confirme a nova senha"
+                           />
+                         </div>
+                         <Button onClick={alterarSenha} variant="secondary" className="w-full">
+                           Alterar Senha
+                         </Button>
+                       </div>
                       
-                      <Button onClick={logout} variant="destructive" className="w-full">
-                        Logout
-                      </Button>
+                       <Button onClick={salvarAlteracoes} className="w-full">
+                         Salvar Alterações
+                       </Button>
+                       
+                       <Button onClick={logout} variant="destructive" className="w-full">
+                         Logout
+                       </Button>
                     </div>
                   )}
                 </CardContent>
@@ -1008,11 +1198,74 @@ const Index = () => {
                             </div>
                           ))}
                         </div>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                       </div>
+                       
+                       <div>
+                         <h4 className="font-medium mb-3">Valores de Alimentação</h4>
+                         
+                         <div className="space-y-4">
+                           <div>
+                             <h5 className="text-sm font-medium mb-2">Operação Ordinária</h5>
+                             <div className="space-y-2">
+                               <div>
+                                 <Label className="text-xs">Valor por hora (mínimo 8h)</Label>
+                                 <Input
+                                   type="number"
+                                   step="0.01"
+                                   value={(alimentacao.ordinaria as any)?.valorHora || 2}
+                                   onChange={(e) => setAlimentacao(prev => ({
+                                     ...prev,
+                                     ordinaria: { ...prev.ordinaria, valorHora: Number(e.target.value) }
+                                   }))}
+                                   className="text-xs"
+                                 />
+                               </div>
+                             </div>
+                           </div>
+
+                           <div>
+                             <h5 className="text-sm font-medium mb-2">Operação Reveillon</h5>
+                             <div>
+                               <Label className="text-xs">Valor para 12h</Label>
+                               <Input
+                                 type="number"
+                                 step="0.01"
+                                 value={(alimentacao.reveillon as any)?.[12] || 13.68}
+                                 onChange={(e) => setAlimentacao(prev => ({
+                                   ...prev,
+                                   reveillon: { ...prev.reveillon, 12: Number(e.target.value) }
+                                 }))}
+                                 className="text-xs"
+                               />
+                             </div>
+                           </div>
+
+                           <div>
+                             <h5 className="text-sm font-medium mb-2">Operação Carnaval</h5>
+                             <div className="grid grid-cols-2 gap-2">
+                               {Object.entries((alimentacao.carnaval as any) || {}).map(([horas, valor]) => (
+                                 <div key={horas} className="space-y-1">
+                                   <Label className="text-xs">{horas}h</Label>
+                                   <Input
+                                     type="number"
+                                     step="0.01"
+                                     value={valor as number}
+                                     onChange={(e) => setAlimentacao(prev => ({
+                                       ...prev,
+                                       carnaval: { ...prev.carnaval, [horas]: Number(e.target.value) }
+                                     }))}
+                                     className="text-xs"
+                                   />
+                                 </div>
+                               ))}
+                             </div>
+                           </div>
+                         </div>
+                       </div>
+                     </div>
+                   )}
+                 </CardContent>
+               </Card>
 
               {/* Servidores */}
               <Card>
@@ -1057,6 +1310,106 @@ const Index = () => {
                       </TableBody>
                     </Table>
                   </div>
+                </CardContent>
+               </Card>
+
+              {/* Sistema de Perfis de Usuário */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sistema de Perfis de Usuário</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {!adminLogged ? (
+                    <div className="text-sm text-muted-foreground">
+                      Faça login como administrador para gerenciar perfis de usuário.
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      <div>
+                        <h4 className="font-medium mb-3">Criar Novo Perfil</h4>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label>Nome do Setor</Label>
+                            <Input
+                              value={novoPerfil.nomeSetor}
+                              onChange={(e) => setNovoPerfil(prev => ({ ...prev, nomeSetor: e.target.value }))}
+                              placeholder="Ex: SEGEP, GEOP, etc."
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Nome do Gestor</Label>
+                            <Input
+                              value={novoPerfil.nomeGestor}
+                              onChange={(e) => setNovoPerfil(prev => ({ ...prev, nomeGestor: e.target.value }))}
+                              placeholder="Nome completo do gestor"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Matrícula</Label>
+                            <Input
+                              value={novoPerfil.matricula}
+                              onChange={(e) => setNovoPerfil(prev => ({ ...prev, matricula: e.target.value }))}
+                              placeholder="Matrícula do gestor"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Login</Label>
+                            <Input
+                              value={novoPerfil.login}
+                              onChange={(e) => setNovoPerfil(prev => ({ ...prev, login: e.target.value }))}
+                              placeholder="Nome de usuário para login"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Senha</Label>
+                            <Input
+                              type="password"
+                              value={novoPerfil.senha}
+                              onChange={(e) => setNovoPerfil(prev => ({ ...prev, senha: e.target.value }))}
+                              placeholder="Senha de acesso"
+                            />
+                          </div>
+                        </div>
+                        <Button onClick={criarPerfil} className="mt-4">Criar Perfil</Button>
+                      </div>
+
+                      <div>
+                        <h4 className="font-medium mb-3">Perfis Existentes</h4>
+                        <div className="space-y-2">
+                          {perfisUsuario.length === 0 ? (
+                            <div className="text-sm text-muted-foreground">Nenhum perfil criado ainda.</div>
+                          ) : (
+                            perfisUsuario.map((perfil) => (
+                              <div key={perfil.id} className="flex items-center justify-between p-3 border rounded">
+                                <div className="flex-1">
+                                  <div className="font-medium">{perfil.nomeSetor} - {perfil.nomeGestor}</div>
+                                  <div className="text-sm text-muted-foreground">
+                                    Login: {perfil.login} | Matrícula: {perfil.matricula}
+                                  </div>
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    variant={perfil.ativo ? "default" : "secondary"}
+                                    onClick={() => togglePerfilAtivo(perfil.id)}
+                                  >
+                                    {perfil.ativo ? "Ativo" : "Inativo"}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => excluirPerfil(perfil.id)}
+                                  >
+                                    Excluir
+                                  </Button>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
