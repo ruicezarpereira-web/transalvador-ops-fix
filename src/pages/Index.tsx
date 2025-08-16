@@ -71,8 +71,10 @@ const alimentacaoDefault = {
   ordinaria: { proporcional: true, valorHora: 2.0, minimoHoras: 8 },
   reveillon: { 12: 13.68, proporcional: true },
   carnaval: {
-    4: 12.18, 6: 18.27, 7: 21.32, 8: 35.92, 
-    11: 43.08, 12: 47.00, 19: 59.09, 24: 74.64
+    1: 3.05, 2: 6.09, 3: 9.14, 4: 12.18, 5: 15.23, 6: 18.27, 7: 21.32, 8: 35.92, 
+    9: 39.01, 10: 42.10, 11: 43.08, 12: 47.00, 13: 50.05, 14: 53.10, 15: 56.15, 
+    16: 57.13, 17: 58.11, 18: 59.08, 19: 59.09, 20: 62.14, 21: 65.19, 22: 68.24, 
+    23: 71.29, 24: 74.64
   },
 } as any;
 
@@ -247,13 +249,15 @@ const Index = () => {
   const SECURITY_QUESTION = "My birthday?";
   const SECURITY_ANSWER = "27 de Setembro";
 
-  // Estados locais do painel de acesso
+  // Estados do sistema de login unificado
   const [loginUsuario, setLoginUsuario] = useState("");
   const [loginSenha, setLoginSenha] = useState("");
   const [novaSenha, setNovaSenha] = useState("");
   const [confirmarSenha, setConfirmarSenha] = useState("");
   const [respostaSeguranca, setRespostaSeguranca] = useState("");
   const [novaSenhaSeguranca, setNovaSenhaSeguranca] = useState("");
+  const [sistemaDesbloqueado, setSistemaDesbloqueado] = useState<boolean>(() => load<boolean>("sistemaDesbloqueado", false));
+  const [usuarioTipo, setUsuarioTipo] = useState<"admin" | "regular" | null>(() => load<string>("usuarioTipo", null) as "admin" | "regular" | null);
   
   // Opções de operação por ano
   const opcoesOperacao = useMemo(() => buildOpcoes(ano), [ano]);
@@ -372,17 +376,40 @@ const Index = () => {
   useEffect(() => save("alimentacaoOperacoes", alimentacao), [alimentacao]);
   useEffect(() => save("perfisUsuario", perfisUsuario), [perfisUsuario]);
   useEffect(() => save("usuarioLogado", usuarioLogado), [usuarioLogado]);
+  useEffect(() => save("sistemaDesbloqueado", sistemaDesbloqueado), [sistemaDesbloqueado]);
+  useEffect(() => save("usuarioTipo", usuarioTipo), [usuarioTipo]);
 
-  // Login/Admin functions
+  // Sistema de login unificado
   const realizarLogin = () => {
+    // Verificar se é login de administrador
     if (loginUsuario === adminUser && loginSenha === adminPass) {
       setAdminLogged(true);
+      setSistemaDesbloqueado(true);
+      setUsuarioTipo("admin");
       setLoginUsuario("");
       setLoginSenha("");
-      toast({ title: "Login realizado com sucesso" });
-    } else {
-      toast({ title: "Credenciais inválidas", variant: "destructive" });
+      toast({ title: "Login de administrador realizado com sucesso" });
+      return;
     }
+    
+    // Verificar se é login de usuário regular
+    const perfil = perfisUsuario.find(p => 
+      p.login === loginUsuario && 
+      p.senha === loginSenha && 
+      p.ativo
+    );
+    
+    if (perfil) {
+      setUsuarioLogado(perfil);
+      setSistemaDesbloqueado(true);
+      setUsuarioTipo("regular");
+      setLoginUsuario("");
+      setLoginSenha("");
+      toast({ title: `Bem-vindo, ${perfil.nomeSetor}` });
+      return;
+    }
+    
+    toast({ title: "Credenciais inválidas", variant: "destructive" });
   };
 
   const alterarSenha = () => {
@@ -421,6 +448,9 @@ const Index = () => {
 
   const logout = () => {
     setAdminLogged(false);
+    setUsuarioLogado(null);
+    setSistemaDesbloqueado(false);
+    setUsuarioTipo(null);
     toast({ title: "Logout realizado" });
   };
 
@@ -463,26 +493,7 @@ const Index = () => {
     toast({ title: "Perfil excluído" });
   };
 
-  const loginUsuarioRegular = () => {
-    const perfil = perfisUsuario.find(p => 
-      p.login === loginRegular.login && 
-      p.senha === loginRegular.senha && 
-      p.ativo
-    );
-    
-    if (perfil) {
-      setUsuarioLogado(perfil);
-      setLoginRegular({ login: "", senha: "" });
-      toast({ title: `Bem-vindo, ${perfil.nomeSetor}` });
-    } else {
-      toast({ title: "Credenciais inválidas", variant: "destructive" });
-    }
-  };
-
-  const logoutUsuarioRegular = () => {
-    setUsuarioLogado(null);
-    toast({ title: "Logout realizado" });
-  };
+  // Remover funções duplicadas pois agora o login é unificado
 
   const alterarNomeUsuario = () => {
     if (!adminLogged) {
@@ -950,6 +961,71 @@ const Index = () => {
     toast({ title: "Editando lançamento", description: `${l.servidor.nome} - ${l.nomeOperacao}` });
   };
 
+  // Se o sistema não estiver desbloqueado, mostrar apenas tela de login
+  if (!sistemaDesbloqueado) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background to-card/60">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl mb-2">GEOPS - Sistema Bloqueado</CardTitle>
+            <p className="text-muted-foreground">Sistema de Geração e Controle de Operações Especiais</p>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Usuário</Label>
+                <Input
+                  value={loginUsuario}
+                  onChange={(e) => setLoginUsuario(e.target.value)}
+                  placeholder="Digite o usuário"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Senha</Label>
+                <Input
+                  type="password"
+                  value={loginSenha}
+                  onChange={(e) => setLoginSenha(e.target.value)}
+                  placeholder="Digite a senha"
+                  onKeyDown={(e) => e.key === "Enter" && realizarLogin()}
+                />
+              </div>
+              <Button onClick={realizarLogin} className="w-full">
+                Entrar no Sistema
+              </Button>
+              
+              <hr className="my-4" />
+              
+              <div className="space-y-3">
+                <h4 className="font-medium">Redefinir Senha de Administrador</h4>
+                <div className="space-y-2">
+                  <Label>Pergunta: {SECURITY_QUESTION}</Label>
+                  <Input
+                    value={respostaSeguranca}
+                    onChange={(e) => setRespostaSeguranca(e.target.value)}
+                    placeholder="Digite a resposta"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Nova Senha</Label>
+                  <Input
+                    type="password"
+                    value={novaSenhaSeguranca}
+                    onChange={(e) => setNovaSenhaSeguranca(e.target.value)}
+                    placeholder="Digite a nova senha"
+                  />
+                </div>
+                <Button onClick={redefinirSenha} variant="secondary" className="w-full">
+                  Redefinir Senha
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen">
       <header className="border-b bg-gradient-to-br from-background to-card/60">
@@ -960,39 +1036,29 @@ const Index = () => {
               <p className="text-muted-foreground mt-1">Sistema de Geração e Controle de Operações Especiais.</p>
             </div>
             
-            {/* Login de usuários regulares */}
+            {/* Informações do usuário logado */}
             <div className="flex items-center gap-4">
-              {usuarioLogado ? (
+              {usuarioTipo === "admin" ? (
+                <div className="flex items-center gap-2">
+                  <div className="text-right">
+                    <div className="font-medium text-green-600">Administrador</div>
+                    <div className="text-sm text-muted-foreground">{adminUser}</div>
+                  </div>
+                  <Button onClick={logout} variant="outline" size="sm">
+                    Logout
+                  </Button>
+                </div>
+              ) : usuarioLogado ? (
                 <div className="flex items-center gap-2">
                   <div className="text-right">
                     <div className="font-medium">{usuarioLogado.nomeSetor}</div>
                     <div className="text-sm text-muted-foreground">{usuarioLogado.nomeGestor}</div>
                   </div>
-                  <Button onClick={logoutUsuarioRegular} variant="outline" size="sm">
+                  <Button onClick={logout} variant="outline" size="sm">
                     Logout
                   </Button>
                 </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <Input
-                    placeholder="Login"
-                    value={loginRegular.login}
-                    onChange={(e) => setLoginRegular(prev => ({ ...prev, login: e.target.value }))}
-                    className="w-24"
-                  />
-                  <Input
-                    type="password"
-                    placeholder="Senha"
-                    value={loginRegular.senha}
-                    onChange={(e) => setLoginRegular(prev => ({ ...prev, senha: e.target.value }))}
-                    onKeyDown={(e) => e.key === "Enter" && loginUsuarioRegular()}
-                    className="w-24"
-                  />
-                  <Button onClick={loginUsuarioRegular} size="sm">
-                    Entrar
-                  </Button>
-                </div>
-              )}
+               ) : null}
             </div>
           </div>
         </div>
@@ -1001,13 +1067,14 @@ const Index = () => {
       <main className="container py-8">
         <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsList className="grid grid-cols-4 w-full">
-            <TabsTrigger value="rh">Banco de Dados</TabsTrigger>
+            {usuarioTipo === "admin" && <TabsTrigger value="rh">Banco de Dados</TabsTrigger>}
             <TabsTrigger value="lancamentos">Lançamentos</TabsTrigger>
             <TabsTrigger value="planilha">Planilha</TabsTrigger>
-            <TabsTrigger value="logs">Logs</TabsTrigger>
+            <TabsTrigger value="logs">Histórico de Lançamentos</TabsTrigger>
           </TabsList>
 
-          {/* Banco de Dados */}
+          {/* Banco de Dados - Apenas para administradores */}
+          {usuarioTipo === "admin" && (
           <TabsContent value="rh" className="mt-6">
             <div className="grid gap-6 md:grid-cols-2">
               
@@ -1240,32 +1307,67 @@ const Index = () => {
                              </div>
                            </div>
 
-                           <div>
-                             <h5 className="text-sm font-medium mb-2">Operação Carnaval</h5>
-                             <div className="grid grid-cols-2 gap-2">
-                               {Object.entries((alimentacao.carnaval as any) || {}).map(([horas, valor]) => (
-                                 <div key={horas} className="space-y-1">
-                                   <Label className="text-xs">{horas}h</Label>
-                                   <Input
-                                     type="number"
-                                     step="0.01"
-                                     value={valor as number}
-                                     onChange={(e) => setAlimentacao(prev => ({
-                                       ...prev,
-                                       carnaval: { ...prev.carnaval, [horas]: Number(e.target.value) }
-                                     }))}
-                                     className="text-xs"
-                                   />
-                                 </div>
-                               ))}
-                             </div>
-                           </div>
+                            <div>
+                              <h5 className="text-sm font-medium mb-2">Operação Carnaval</h5>
+                              <div className="grid grid-cols-3 gap-2 max-h-60 overflow-y-auto">
+                                {Object.entries((alimentacao.carnaval as any) || {})
+                                  .sort(([a], [b]) => Number(a) - Number(b))
+                                  .map(([horas, valor]) => (
+                                  <div key={horas} className="space-y-1">
+                                    <Label className="text-xs">{horas}h</Label>
+                                    <Input
+                                      type="number"
+                                      step="0.01"
+                                      value={valor as number}
+                                      onChange={(e) => setAlimentacao(prev => ({
+                                        ...prev,
+                                        carnaval: { ...prev.carnaval, [horas]: Number(e.target.value) }
+                                      }))}
+                                      className="text-xs"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
                          </div>
                        </div>
                      </div>
                    )}
                  </CardContent>
-               </Card>
+                </Card>
+
+                {/* Contatos do Setor */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Contatos do Setor</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {!adminLogged ? (
+                      <div className="text-sm text-muted-foreground">
+                        Faça login para configurar os contatos.
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <Label>Telefone 1</Label>
+                          <Input
+                            value={contatos.telefone1}
+                            onChange={(e) => setContatos(prev => ({ ...prev, telefone1: e.target.value }))}
+                            placeholder="(71) 9999-9999"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Telefone 2</Label>
+                          <Input
+                            value={contatos.telefone2}
+                            onChange={(e) => setContatos(prev => ({ ...prev, telefone2: e.target.value }))}
+                            placeholder="(71) 9999-9999"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
 
               {/* Servidores */}
               <Card>
@@ -1457,9 +1559,10 @@ const Index = () => {
                     <div className="text-xs text-muted-foreground">Faça login no painel de acesso para editar os telefones.</div>
                   )}
                 </CardContent>
-              </Card>
+                </Card>
             </div>
           </TabsContent>
+          )}
 
           {/* Lançamentos */}
           <TabsContent value="lancamentos" className="mt-6">
@@ -1686,7 +1789,7 @@ const Index = () => {
             </Card>
           </TabsContent>
 
-          {/* Logs */}
+          {/* Histórico de Lançamentos */}
           <TabsContent value="logs" className="mt-6">
             <Card>
               <CardHeader>
