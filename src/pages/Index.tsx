@@ -738,16 +738,15 @@ const Index = () => {
     const rows = ordered.map((d) => {
       const vHora = valorHora(d.funcao, selectedOp?.tipo ?? "ordinaria");
       const valorTotal = d.horas * vHora;
-      let alimentacao = 0;
+      let valorAlimentacao = 0;
       
       // Cálculo alimentação por tipo de operação
       if (selectedOp?.tipo === "ordinaria") {
-        alimentacao = d.horas >= 8 ? d.horas * 2 : 0;
+        valorAlimentacao = d.horas >= 8 ? d.horas * 2 : 0;
       } else if (selectedOp?.tipo === "reveillon") {
-        alimentacao = d.horas >= 12 ? 13.68 : (13.68 * d.horas) / 12;
+        valorAlimentacao = d.horas >= 12 ? 13.68 : (13.68 * d.horas) / 12;
       } else if (selectedOp?.tipo === "carnaval") {
-        const alimentacaoCarnaval = alimentacao as any;
-        alimentacao = alimentacaoCarnaval.carnaval?.[d.horas] || 0;
+        valorAlimentacao = (alimentacao as any).carnaval?.[d.horas] || 0;
       }
       
       return [
@@ -756,7 +755,7 @@ const Index = () => {
         funcaoLabel(d.funcao),
         fmtBRL(vHora),
         fmtBRL(valorTotal),
-        fmtBRL(alimentacao),
+        fmtBRL(valorAlimentacao),
         "",
       ];
     });
@@ -1066,7 +1065,7 @@ const Index = () => {
 
       <main className="container py-8">
         <Tabs value={tab} onValueChange={setTab} className="w-full">
-          <TabsList className="grid grid-cols-4 w-full">
+          <TabsList className="grid w-full" style={{ gridTemplateColumns: usuarioTipo === "admin" ? "repeat(4, 1fr)" : "repeat(3, 1fr)" }}>
             {usuarioTipo === "admin" && <TabsTrigger value="rh">Banco de Dados</TabsTrigger>}
             <TabsTrigger value="lancamentos">Lançamentos</TabsTrigger>
             <TabsTrigger value="planilha">Planilha</TabsTrigger>
@@ -1336,38 +1335,6 @@ const Index = () => {
                  </CardContent>
                 </Card>
 
-                {/* Contatos do Setor */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Contatos do Setor</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    {!adminLogged ? (
-                      <div className="text-sm text-muted-foreground">
-                        Faça login para configurar os contatos.
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <Label>Telefone 1</Label>
-                          <Input
-                            value={contatos.telefone1}
-                            onChange={(e) => setContatos(prev => ({ ...prev, telefone1: e.target.value }))}
-                            placeholder="(71) 9999-9999"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Telefone 2</Label>
-                          <Input
-                            value={contatos.telefone2}
-                            onChange={(e) => setContatos(prev => ({ ...prev, telefone2: e.target.value }))}
-                            placeholder="(71) 9999-9999"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
 
               {/* Servidores */}
               <Card>
@@ -1789,11 +1756,11 @@ const Index = () => {
             </Card>
           </TabsContent>
 
-          {/* Histórico de Lançamentos */}
+               {/* Histórico de Lançamentos */}
           <TabsContent value="logs" className="mt-6">
             <Card>
               <CardHeader>
-                <CardTitle>Logs de Lançamentos</CardTitle>
+                <CardTitle>Histórico de Lançamentos</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
