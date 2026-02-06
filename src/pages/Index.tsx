@@ -425,6 +425,8 @@ const Index = () => {
       toast({ title: "Senha deve ter pelo menos 6 caracteres", variant: "destructive" });
       return;
     }
+    // Salva imediatamente no localStorage para garantir persistência
+    save("adminPass", novaSenha);
     setAdminPass(novaSenha);
     setNovaSenha("");
     setConfirmarSenha("");
@@ -440,6 +442,8 @@ const Index = () => {
       toast({ title: "Nova senha deve ter pelo menos 6 caracteres", variant: "destructive" });
       return;
     }
+    // Salva imediatamente no localStorage para garantir persistência
+    save("adminPass", novaSenhaSeguranca);
     setAdminPass(novaSenhaSeguranca);
     setRespostaSeguranca("");
     setNovaSenhaSeguranca("");
