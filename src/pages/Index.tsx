@@ -224,6 +224,7 @@ const Index = () => {
   const [loteHoras, setLoteHoras] = useState<number>(8);
   const [loteFuncao, setLoteFuncao] = useState<FuncaoID>("agente_fiscalizacao");
   const [loteMatriculas, setLoteMatriculas] = useState<string[]>([]);
+  const [loteConflitos, setLoteConflitos] = useState<string[]>([]);
 
   // Configurações
   const [senhaMaster, setSenhaMaster] = useState<string>(() => load<string>("senhaMaster", SENHA_MASTER_PADRAO));
@@ -544,6 +545,7 @@ const Index = () => {
   };
 
   const salvarLancamentoPorData = () => {
+    setLoteConflitos([]);
     if (loteDatas.length === 0) {
       toast({ title: "Adicione pelo menos uma data", variant: "destructive" });
       return;
@@ -560,6 +562,7 @@ const Index = () => {
     const tipo = selectedOp?.tipo ?? "ordinaria";
     const nomeOperacao = selectedOp?.label ?? "";
     const conflitos: string[] = [];
+    const bloqueados: string[] = [];
     let criados = 0;
     let atualizados = 0;
 
@@ -572,16 +575,17 @@ const Index = () => {
         const datasExistentes = new Set(
           next.filter((l) => l.servidor.matricula === mat).flatMap((l) => l.dias.map((d) => d.data))
         );
-        const novasDatas = loteDatas.filter((data) => {
-          if (datasExistentes.has(data)) {
-            conflitos.push(`${srv.nome} (${toBR(data)})`);
-            return false;
-          }
-          return true;
-        });
-        if (novasDatas.length === 0) return;
+        const datasConflitantes = loteDatas.filter((data) => datasExistentes.has(data));
+        if (datasConflitantes.length > 0) {
+          // Servidor com data(s) já lançada(s): NÃO é lançado e o erro é apontado.
+          conflitos.push(
+            `${srv.nome} (${srv.matricula}) — já possui lançamento em ${datasConflitantes.map(toBR).join(", ")}`
+          );
+          bloqueados.push(mat);
+          return;
+        }
 
-        const novosDias: DiaTrabalho[] = novasDatas.map((data) => ({ data, horas: loteHoras, funcao: loteFuncao }));
+        const novosDias: DiaTrabalho[] = loteDatas.map((data) => ({ data, horas: loteHoras, funcao: loteFuncao }));
         const existenteIdx = next.findIndex(
           (l) => l.servidor.matricula === mat && l.nomeOperacao === nomeOperacao && l.periodo.inicio === periodo.inicio && l.periodo.fim === periodo.fim
         );
@@ -608,12 +612,24 @@ const Index = () => {
       return next;
     });
 
-    toast({
-      title: "Lançamento por data concluído",
-      description: `${criados} novo(s), ${atualizados} atualizado(s)${conflitos.length ? ` • ${conflitos.length} conflito(s) ignorado(s)` : ""}`,
-    });
-    setLoteMatriculas([]);
+    setLoteConflitos(conflitos);
+    if (conflitos.length > 0) {
+      toast({
+        title: `${conflitos.length} servidor(es) não lançado(s)`,
+        description: conflitos.slice(0, 3).join(" | ") + (conflitos.length > 3 ? " ..." : ""),
+        variant: "destructive",
+      });
+    }
+    if (criados + atualizados > 0) {
+      toast({
+        title: "Lançamento por data concluído",
+        description: `${criados} novo(s), ${atualizados} atualizado(s)`,
+      });
+    }
+    // Mantém selecionados apenas os que falharam, para correção
+    setLoteMatriculas(bloqueados);
   };
+
 
   // Consolidação
   const [filtroOperacao, setFiltroOperacao] = useState<string>("todos");
@@ -957,7 +973,7 @@ const Index = () => {
             <TabsTrigger value="por-data">Por Data</TabsTrigger>
             <TabsTrigger value="planilha">Planilha</TabsTrigger>
             <TabsTrigger value="logs">Histórico</TabsTrigger>
-            <TabsTrigger value="rh">Banco de Dados</TabsTrigger>
+            <TabsTrigger value="rh">Banco de Dados e Configurações</TabsTrigger>
           </TabsList>
 
           {/* Lançamento por servidor */}
@@ -1169,9 +1185,20 @@ const Index = () => {
                 <CardHeader><CardTitle>Servidores do dia</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
                   <MultiServerSelect servidores={servidores} selecionados={loteMatriculas} onChange={setLoteMatriculas} />
+                  {loteConflitos.length > 0 && (
+                    <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 space-y-1">
+                      <div className="text-sm font-medium text-destructive">
+                        {loteConflitos.length} servidor(es) NÃO foram lançados (datas já lançadas):
+                      </div>
+                      <ul className="list-disc pl-5 text-xs text-destructive space-y-0.5">
+                        {loteConflitos.map((c) => (<li key={c}>{c}</li>))}
+                      </ul>
+                    </div>
+                  )}
                   <div className="text-xs text-muted-foreground">
-                    Serão criados {loteDatas.length} dia(s) de {loteHoras}h para cada servidor selecionado. Datas já lançadas para o servidor são ignoradas automaticamente.
+                    Serão criados {loteDatas.length} dia(s) de {loteHoras}h para cada servidor selecionado. Servidores que já possuam lançamento em qualquer uma das datas não são lançados e o sistema aponta o erro.
                   </div>
+
                   <Button onClick={salvarLancamentoPorData}>Lançar para os servidores selecionados</Button>
                 </CardContent>
               </Card>
