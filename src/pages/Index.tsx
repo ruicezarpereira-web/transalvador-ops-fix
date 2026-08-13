@@ -544,6 +544,7 @@ const Index = () => {
   };
 
   const salvarLancamentoPorData = () => {
+    setLoteConflitos([]);
     if (loteDatas.length === 0) {
       toast({ title: "Adicione pelo menos uma data", variant: "destructive" });
       return;
@@ -560,6 +561,7 @@ const Index = () => {
     const tipo = selectedOp?.tipo ?? "ordinaria";
     const nomeOperacao = selectedOp?.label ?? "";
     const conflitos: string[] = [];
+    const bloqueados: string[] = [];
     let criados = 0;
     let atualizados = 0;
 
@@ -572,16 +574,17 @@ const Index = () => {
         const datasExistentes = new Set(
           next.filter((l) => l.servidor.matricula === mat).flatMap((l) => l.dias.map((d) => d.data))
         );
-        const novasDatas = loteDatas.filter((data) => {
-          if (datasExistentes.has(data)) {
-            conflitos.push(`${srv.nome} (${toBR(data)})`);
-            return false;
-          }
-          return true;
-        });
-        if (novasDatas.length === 0) return;
+        const datasConflitantes = loteDatas.filter((data) => datasExistentes.has(data));
+        if (datasConflitantes.length > 0) {
+          // Servidor com data(s) já lançada(s): NÃO é lançado e o erro é apontado.
+          conflitos.push(
+            `${srv.nome} (${srv.matricula}) — já possui lançamento em ${datasConflitantes.map(toBR).join(", ")}`
+          );
+          bloqueados.push(mat);
+          return;
+        }
 
-        const novosDias: DiaTrabalho[] = novasDatas.map((data) => ({ data, horas: loteHoras, funcao: loteFuncao }));
+        const novosDias: DiaTrabalho[] = loteDatas.map((data) => ({ data, horas: loteHoras, funcao: loteFuncao }));
         const existenteIdx = next.findIndex(
           (l) => l.servidor.matricula === mat && l.nomeOperacao === nomeOperacao && l.periodo.inicio === periodo.inicio && l.periodo.fim === periodo.fim
         );
@@ -608,12 +611,24 @@ const Index = () => {
       return next;
     });
 
-    toast({
-      title: "Lançamento por data concluído",
-      description: `${criados} novo(s), ${atualizados} atualizado(s)${conflitos.length ? ` • ${conflitos.length} conflito(s) ignorado(s)` : ""}`,
-    });
-    setLoteMatriculas([]);
+    setLoteConflitos(conflitos);
+    if (conflitos.length > 0) {
+      toast({
+        title: `${conflitos.length} servidor(es) não lançado(s)`,
+        description: conflitos.slice(0, 3).join(" | ") + (conflitos.length > 3 ? " ..." : ""),
+        variant: "destructive",
+      });
+    }
+    if (criados + atualizados > 0) {
+      toast({
+        title: "Lançamento por data concluído",
+        description: `${criados} novo(s), ${atualizados} atualizado(s)`,
+      });
+    }
+    // Mantém selecionados apenas os que falharam, para correção
+    setLoteMatriculas(bloqueados);
   };
+
 
   // Consolidação
   const [filtroOperacao, setFiltroOperacao] = useState<string>("todos");
