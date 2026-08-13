@@ -224,6 +224,7 @@ const Index = () => {
   const [loteHoras, setLoteHoras] = useState<number>(8);
   const [loteFuncao, setLoteFuncao] = useState<FuncaoID>("agente_fiscalizacao");
   const [loteMatriculas, setLoteMatriculas] = useState<string[]>([]);
+  const [loteConflitos, setLoteConflitos] = useState<string[]>([]);
 
   // Configurações
   const [senhaMaster, setSenhaMaster] = useState<string>(() => load<string>("senhaMaster", SENHA_MASTER_PADRAO));
