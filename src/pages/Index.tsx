@@ -973,7 +973,7 @@ const Index = () => {
             <TabsTrigger value="por-data">Por Data</TabsTrigger>
             <TabsTrigger value="planilha">Planilha</TabsTrigger>
             <TabsTrigger value="logs">Histórico</TabsTrigger>
-            <TabsTrigger value="rh">Banco de Dados</TabsTrigger>
+            <TabsTrigger value="rh">Banco de Dados e Configurações</TabsTrigger>
           </TabsList>
 
           {/* Lançamento por servidor */}
