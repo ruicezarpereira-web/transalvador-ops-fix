@@ -1185,9 +1185,20 @@ const Index = () => {
                 <CardHeader><CardTitle>Servidores do dia</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
                   <MultiServerSelect servidores={servidores} selecionados={loteMatriculas} onChange={setLoteMatriculas} />
+                  {loteConflitos.length > 0 && (
+                    <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 space-y-1">
+                      <div className="text-sm font-medium text-destructive">
+                        {loteConflitos.length} servidor(es) NÃO foram lançados (datas já lançadas):
+                      </div>
+                      <ul className="list-disc pl-5 text-xs text-destructive space-y-0.5">
+                        {loteConflitos.map((c) => (<li key={c}>{c}</li>))}
+                      </ul>
+                    </div>
+                  )}
                   <div className="text-xs text-muted-foreground">
-                    Serão criados {loteDatas.length} dia(s) de {loteHoras}h para cada servidor selecionado. Datas já lançadas para o servidor são ignoradas automaticamente.
+                    Serão criados {loteDatas.length} dia(s) de {loteHoras}h para cada servidor selecionado. Servidores que já possuam lançamento em qualquer uma das datas não são lançados e o sistema aponta o erro.
                   </div>
+
                   <Button onClick={salvarLancamentoPorData}>Lançar para os servidores selecionados</Button>
                 </CardContent>
               </Card>
