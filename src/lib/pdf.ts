@@ -152,7 +152,7 @@ export const drawFooters = (doc: jsPDF, contato?: string) => {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.5);
     doc.setTextColor(GREY[0], GREY[1], GREY[2]);
-    doc.text(`${ORGAO} — Documento gerado pelo GEOPS em ${emissao}`, 14, h - 9.5);
+    doc.text(`GEOPS — emitido em ${emissao}`, 14, h - 9.5);
     if (contato) doc.text(contato, w / 2, h - 9.5, { align: "center" });
     doc.text(`Página ${p} de ${total}`, w - 14, h - 9.5, { align: "right" });
   }
