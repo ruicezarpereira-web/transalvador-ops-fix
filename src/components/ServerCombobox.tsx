@@ -15,7 +15,11 @@ export type Servidor = {
   matricula: string;
   nome: string;
   cpf?: string;
-  cargo?: string;
+  nascimento?: string;
+  sexo?: string;
+  registroUnico?: string;
+  rg?: string;
+  admissao?: string;
 };
 
 interface ServerComboboxProps {
@@ -48,7 +52,6 @@ export const ServerCombobox: React.FC<ServerComboboxProps> = ({
       </PopoverTrigger>
       <PopoverContent className="p-0 w-[var(--radix-popover-trigger-width)] z-50 bg-popover">
         <Command filter={(value, search) => {
-          // custom filter: busca por nome, matrícula e cpf parcial
           const srv = servidores.find((s) => `${s.nome} (${s.matricula})` === value);
           const target = `${srv?.nome ?? ""} ${srv?.matricula ?? ""} ${srv?.cpf ?? ""}`.toLowerCase();
           return target.includes(search.toLowerCase()) ? 1 : 0;
