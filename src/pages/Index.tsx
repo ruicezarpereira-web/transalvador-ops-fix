@@ -1169,9 +1169,21 @@ const Index = () => {
 
                   <div className="flex gap-2 flex-wrap">
                     <Button onClick={adicionarDia}>+ Adicionar dia</Button>
-                    <Button onClick={salvarLancamento}>Salvar Lançamento</Button>
-                    <Button variant="secondary" onClick={() => gerarFrequenciaPDF()}>Gerar Frequência (PDF)</Button>
+                    <Button onClick={salvarLancamento}>{editingId ? "Salvar alterações" : "Registrar frequência"}</Button>
+                    {editingId && (
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          setEditingId(null);
+                          setDias([{ data: periodo.inicio, horas: 8, funcao: getFuncoesDisponiveisParaOperacao(selectedOp?.tipo || "ordinaria")[0] }]);
+                          toast({ title: "Edição cancelada" });
+                        }}
+                      >
+                        Cancelar edição
+                      </Button>
+                    )}
                   </div>
+
                 </CardContent>
               </Card>
             </div>
