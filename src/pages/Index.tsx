@@ -1354,44 +1354,94 @@ const Index = () => {
           {/* Histórico */}
           <TabsContent value="logs" className="mt-6">
             <Card>
-              <CardHeader><CardTitle>Histórico de Lançamentos</CardTitle></CardHeader>
+              <CardHeader><CardTitle>Histórico de Frequências Registradas</CardTitle></CardHeader>
               <CardContent>
+                <div className="grid md:grid-cols-3 gap-3 mb-4">
+                  <div className="space-y-2 md:col-span-1">
+                    <Label>Operação</Label>
+                    <Select value={filtroHistorico} onValueChange={setFiltroHistorico}>
+                      <SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger>
+                      <SelectContent className="z-50">
+                        <SelectItem value="todos">Todas as Operações</SelectItem>
+                        {nomesOperacoesConsolidadas.map((n) => (<SelectItem key={n} value={n}>{n}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 mb-4 flex-wrap">
+                  <Button onClick={gerarRelatorioHistoricoPDF}>Exportar relatório (PDF)</Button>
+                </div>
+
                 <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Data</TableHead>
+                        <TableHead>Registro</TableHead>
                         <TableHead>Servidor</TableHead>
                         <TableHead>Operação</TableHead>
                         <TableHead>Período</TableHead>
                         <TableHead>Dias</TableHead>
+                        <TableHead>Horas</TableHead>
+                        <TableHead>Total</TableHead>
                         <TableHead>Ações</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {lancamentos.length === 0 && (
-                        <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">Sem lançamentos.</TableCell></TableRow>
+                      {historicoFiltrado.length === 0 && (
+                        <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground">Sem frequências registradas.</TableCell></TableRow>
                       )}
-                      {[...lancamentos].sort((a, b) => a.servidor.nome.localeCompare(b.servidor.nome)).map((l) => (
-                        <TableRow key={l.id}>
-                          <TableCell>{new Date(l.createdAt).toLocaleDateString("pt-BR")}</TableCell>
-                          <TableCell>{l.servidor.nome} ({l.servidor.matricula})</TableCell>
-                          <TableCell>{l.nomeOperacao}</TableCell>
-                          <TableCell>{toBR(l.periodo.inicio)} a {toBR(l.periodo.fim)}</TableCell>
-                          <TableCell>{l.dias.length}</TableCell>
-                          <TableCell className="flex gap-2">
-                            <Button size="sm" onClick={() => editarLancamento(l)}>Editar</Button>
-                            <Button size="sm" variant="secondary" onClick={() => gerarFrequenciaPDF(l)}>PDF</Button>
-                            <Button size="sm" variant="destructive" onClick={() => excluirLancamento(l.id)}>Excluir</Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {historicoFiltrado.map((l) => {
+                        const t = totaisLancamento(l);
+                        const aberto = detalheId === l.id;
+                        return (
+                          <>
+                            <TableRow key={l.id}>
+                              <TableCell>{new Date(l.createdAt).toLocaleDateString("pt-BR")}</TableCell>
+                              <TableCell>{l.servidor.nome} ({l.servidor.matricula})</TableCell>
+                              <TableCell>{l.nomeOperacao}</TableCell>
+                              <TableCell>{toBR(l.periodo.inicio)} a {toBR(l.periodo.fim)}</TableCell>
+                              <TableCell>{l.dias.length}</TableCell>
+                              <TableCell>{t.horas.toFixed(2)}</TableCell>
+                              <TableCell>{fmtBRL(t.total)}</TableCell>
+                              <TableCell className="flex gap-2 flex-wrap">
+                                <Button size="sm" variant="secondary" onClick={() => setDetalheId(aberto ? null : l.id)}>
+                                  {aberto ? "Ocultar" : "Visualizar"}
+                                </Button>
+                                <Button size="sm" onClick={() => editarLancamento(l)}>Editar</Button>
+                                <Button size="sm" variant="secondary" onClick={() => gerarExtratoLancamentoPDF(l)}>PDF</Button>
+                                <Button size="sm" variant="destructive" onClick={() => excluirLancamento(l.id)}>Excluir</Button>
+                              </TableCell>
+                            </TableRow>
+                            {aberto && (
+                              <TableRow key={`${l.id}-det`}>
+                                <TableCell colSpan={8} className="bg-muted/40">
+                                  <div className="space-y-1 text-sm">
+                                    {[...l.dias].sort((a, b) => a.data.localeCompare(b.data)).map((d, i) => (
+                                      <div key={i} className="flex flex-wrap gap-x-6">
+                                        <span className="font-medium">{toBR(d.data)}</span>
+                                        <span>{d.horas}h</span>
+                                        <span>{funcaoLabel(d.funcao)}</span>
+                                        <span>Valor horas: {fmtBRL(d.horas * valorHora(d.funcao, l.operacao))}</span>
+                                        <span>Alimentação: {fmtBRL(calcAlimentacao(l.operacao, d.horas))}</span>
+                                      </div>
+                                    ))}
+                                    {l.operacao === "carnaval" && <div>Auxílio transporte: {fmtBRL(t.transporte)}</div>}
+                                    <div className="font-medium pt-1">Total do lançamento: {fmtBRL(t.total)}</div>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
               </CardContent>
             </Card>
           </TabsContent>
+
 
           {/* Banco de Dados / Configurações */}
           <TabsContent value="rh" className="mt-6">
