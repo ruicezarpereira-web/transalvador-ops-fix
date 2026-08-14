@@ -523,10 +523,10 @@ const Index = () => {
     };
 
     setLancamentos((prev) => (editingId ? prev.map((l) => (l.id === editingId ? novo : l)) : [novo, ...prev]));
-    gerarFrequenciaPDF(novo);
+    const eraEdicao = !!editingId;
     setEditingId(null);
     setDias([{ data: periodo.inicio, horas: 8, funcao: getFuncoesDisponiveisParaOperacao(selectedOp?.tipo || "ordinaria")[0] }]);
-    toast({ title: "Lançamento salvo e PDF gerado" });
+    toast({ title: eraEdicao ? "Lançamento atualizado" : "Frequência registrada no histórico" });
   };
 
   // Lançamento por data (vários servidores)
