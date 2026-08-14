@@ -674,75 +674,58 @@ const Index = () => {
 
   const contatoRodape = [contatos.telefone1, contatos.telefone2].filter(Boolean).join(" • ");
 
-  // PDF — Frequência individual
-  const gerarFrequenciaPDF = (lanc?: Lancamento) => {
-    let alvo = lanc;
-    if (!alvo) {
-      const srv = servidores.find((s) => s.matricula === matriculaSelecionada);
-      const diasValidos = dias.filter((d) => d.data && d.horas > 0);
-      if (!srv || diasValidos.length === 0) {
-        toast({ title: "Selecione um servidor e ao menos um dia", variant: "destructive" });
-        return;
-      }
-      alvo = {
-        id: "preview",
-        operacao: selectedOp?.tipo ?? "ordinaria",
-        nomeOperacao: selectedOp?.label ?? "",
-        periodo,
-        servidor: srv,
-        dias: diasValidos,
-        createdAt: new Date().toISOString(),
-      };
-    }
+  // Totais de um lançamento
+  const totaisLancamento = (l: Lancamento) => {
+    let horas = 0, valor = 0, alim = 0;
+    l.dias.forEach((d) => {
+      horas += d.horas;
+      valor += d.horas * valorHora(d.funcao, l.operacao);
+      alim += calcAlimentacao(l.operacao, d.horas);
+    });
+    const transporte = l.operacao === "carnaval" ? 20 : 0;
+    return { horas, valor, alim, transporte, total: valor + alim + transporte };
+  };
 
+  // PDF — Extrato do lançamento registrado
+  const gerarExtratoLancamentoPDF = (l: Lancamento) => {
     const doc = new jsPDF();
-    let y = drawHeader(doc, "Folha de Frequência — Operação Especial", alvo.nomeOperacao);
+    let y = drawHeader(doc, "Extrato de Frequência Registrada", l.nomeOperacao);
 
     y = drawInfoBox(doc, y, [
-      ["Servidor", alvo.servidor.nome],
-      ["Matrícula", alvo.servidor.matricula],
-      ["CPF", formatarCPF(alvo.servidor.cpf)],
-      ["Registro Único", alvo.servidor.registroUnico || "—"],
-      ["Operação", alvo.nomeOperacao],
-      ["Período", `${toBR(alvo.periodo.inicio)} a ${toBR(alvo.periodo.fim)}`],
+      ["Servidor", l.servidor.nome],
+      ["Matrícula", l.servidor.matricula],
+      ["CPF", formatarCPF(l.servidor.cpf)],
+      ["Registro Único", l.servidor.registroUnico || "—"],
+      ["Operação", l.nomeOperacao],
+      ["Período", `${toBR(l.periodo.inicio)} a ${toBR(l.periodo.fim)}`],
+      ["Registrado em", new Date(l.createdAt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })],
+      ["Dias lançados", String(l.dias.length)],
     ]);
 
-    const ordered = [...alvo.dias].sort((a, b) => a.data.localeCompare(b.data));
-    let totalHoras = 0;
-    let totalValor = 0;
-    let totalAlim = 0;
-
-    const rows = ordered.map((d) => {
-      const vHora = valorHora(d.funcao, alvo!.operacao);
-      const valorTotal = d.horas * vHora;
-      const valorAlim = calcAlimentacao(alvo!.operacao, d.horas);
-      totalHoras += d.horas;
-      totalValor += valorTotal;
-      totalAlim += valorAlim;
-      return [
+    const t = totaisLancamento(l);
+    const rows = [...l.dias]
+      .sort((a, b) => a.data.localeCompare(b.data))
+      .map((d) => [
         toBR(d.data),
         `${d.horas}h`,
         funcaoLabel(d.funcao),
-        fmtBRL(vHora),
-        fmtBRL(valorTotal),
-        fmtBRL(valorAlim),
-        "",
-      ];
-    });
+        fmtBRL(valorHora(d.funcao, l.operacao)),
+        fmtBRL(d.horas * valorHora(d.funcao, l.operacao)),
+        fmtBRL(calcAlimentacao(l.operacao, d.horas)),
+      ]);
 
     autoTable(doc, {
       startY: y,
-      head: [["Data", "Horas", "Função na operação", "Valor/Hora", "Valor Horas", "Alimentação", "Assinatura do servidor"]],
+      head: [["Data", "Horas", "Função na operação", "Valor/Hora", "Valor Horas", "Alimentação"]],
       body: rows,
-      foot: [["TOTAL", `${totalHoras}h`, "", "", fmtBRL(totalValor), fmtBRL(totalAlim), ""]],
+      foot: [["TOTAL", `${t.horas}h`, "", "", fmtBRL(t.valor), fmtBRL(t.alim)]],
       margin: { left: 14, right: 14 },
       columnStyles: {
-        0: { halign: "center", cellWidth: 22 },
-        1: { halign: "center", cellWidth: 15 },
-        3: { halign: "right", cellWidth: 22 },
-        4: { halign: "right", cellWidth: 24 },
-        5: { halign: "right", cellWidth: 24 },
-        6: { cellWidth: 42 },
+        0: { halign: "center", cellWidth: 26 },
+        1: { halign: "center", cellWidth: 18 },
+        3: { halign: "right", cellWidth: 26 },
+        4: { halign: "right", cellWidth: 28 },
+        5: { halign: "right", cellWidth: 28 },
       },
       ...(tableTheme as any),
     });
@@ -751,19 +734,99 @@ const Index = () => {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9.5);
     doc.setTextColor(26, 45, 84);
-    doc.text(`TOTAL A RECEBER: ${fmtBRL(totalValor + totalAlim)}`, 14, fy);
+    doc.text(`TOTAL A RECEBER: ${fmtBRL(t.total)}`, 14, fy);
     doc.setTextColor(0, 0, 0);
 
     fy += 22;
     drawSignatures(doc, fy, [
-      { titulo: alvo.servidor.nome, sub: `Matrícula ${alvo.servidor.matricula} — Servidor` },
+      { titulo: l.servidor.nome, sub: `Matrícula ${l.servidor.matricula} — Servidor` },
       { titulo: gestor.nome || "Gestor responsável", sub: gestor.cargo || "Assinatura e carimbo" },
     ]);
 
     drawFooters(doc, contatoRodape);
-    doc.save(`Frequencia_${alvo.servidor.matricula}.pdf`);
-    toast({ title: "Frequência gerada" });
+    doc.save(`Extrato_${l.servidor.matricula}.pdf`);
+    toast({ title: "Extrato gerado" });
   };
+
+  // PDF — Relatório do histórico de lançamentos
+  const gerarRelatorioHistoricoPDF = () => {
+    const lista = lancamentos.filter((l) => filtroHistorico === "todos" || l.nomeOperacao === filtroHistorico);
+    if (lista.length === 0) {
+      toast({ title: "Nenhum lançamento para exportar", variant: "destructive" });
+      return;
+    }
+    const doc = new jsPDF({ orientation: "landscape" });
+    let y = drawHeader(
+      doc,
+      "Relatório de Frequências Registradas",
+      filtroHistorico === "todos" ? "Todas as operações" : filtroHistorico
+    );
+
+    const ordenada = [...lista].sort((a, b) => a.servidor.nome.localeCompare(b.servidor.nome));
+    const acc = ordenada.reduce(
+      (a, l) => {
+        const t = totaisLancamento(l);
+        a.h += t.horas; a.v += t.valor; a.al += t.alim; a.tr += t.transporte; a.g += t.total;
+        return a;
+      },
+      { h: 0, v: 0, al: 0, tr: 0, g: 0 }
+    );
+
+    y = drawInfoBox(doc, y, [
+      ["Lançamentos", String(ordenada.length)],
+      ["Total de horas", acc.h.toFixed(2)],
+      ["Emissão", new Date().toLocaleDateString("pt-BR")],
+      ["Total geral", fmtBRL(acc.g)],
+    ]);
+
+    const rows = ordenada.map((l, i) => {
+      const t = totaisLancamento(l);
+      const datas = [...l.dias].sort((a, b) => a.data.localeCompare(b.data)).map((d) => toBR(d.data)).join(", ");
+      return [
+        String(i + 1),
+        l.servidor.matricula,
+        l.servidor.nome,
+        formatarCPF(l.servidor.cpf),
+        l.nomeOperacao,
+        datas,
+        t.horas.toFixed(2),
+        fmtBRL(t.valor),
+        fmtBRL(t.alim),
+        fmtBRL(t.total),
+      ];
+    });
+
+    autoTable(doc, {
+      startY: y,
+      head: [["#", "Matrícula", "Nome do servidor", "CPF", "Operação", "Datas lançadas", "Horas", "Valor Horas", "Alimentação", "Total"]],
+      body: rows,
+      foot: [["", "", "TOTAL GERAL", "", "", "", acc.h.toFixed(2), fmtBRL(acc.v), fmtBRL(acc.al), fmtBRL(acc.g)]],
+      margin: { left: 14, right: 14 },
+      columnStyles: {
+        0: { halign: "center", cellWidth: 8 },
+        1: { halign: "center" },
+        3: { halign: "center" },
+        5: { cellWidth: 70 },
+        6: { halign: "center" },
+        7: { halign: "right" }, 8: { halign: "right" }, 9: { halign: "right" },
+      },
+      ...(tableTheme as any),
+      bodyStyles: { ...(tableTheme.bodyStyles as any), fontSize: 7.5 },
+      headStyles: { ...(tableTheme.headStyles as any), fontSize: 7.5 },
+      footStyles: { ...(tableTheme.footStyles as any), fontSize: 7.5 },
+    });
+
+    const fy = ((doc as any).lastAutoTable?.finalY ?? y) + 20;
+    drawSignatures(doc, fy, [
+      { titulo: gestor.nome || "Gestor responsável", sub: gestor.cargo || "Assinatura e carimbo" },
+      { titulo: "Data: ____/____/________", sub: "Conferência" },
+    ]);
+
+    drawFooters(doc, contatoRodape);
+    doc.save("Relatorio_Frequencias_Registradas.pdf");
+    toast({ title: "Relatório gerado" });
+  };
+
 
   // PDF — Planilha consolidada
   const gerarPlanilhaPDF = () => {
