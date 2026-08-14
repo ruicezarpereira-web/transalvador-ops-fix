@@ -635,6 +635,13 @@ const Index = () => {
   const [filtroOperacao, setFiltroOperacao] = useState<string>("todos");
   const [filtroHistorico, setFiltroHistorico] = useState<string>("todos");
   const [detalheId, setDetalheId] = useState<string | null>(null);
+  const historicoFiltrado = useMemo(
+    () =>
+      lancamentos
+        .filter((l) => filtroHistorico === "todos" || l.nomeOperacao === filtroHistorico)
+        .sort((a, b) => a.servidor.nome.localeCompare(b.servidor.nome)),
+    [lancamentos, filtroHistorico]
+  );
   const consolidado = useMemo(() => {
     const map = new Map<string, {
       matricula: string; nome: string; cpf: string; coordenador: number; supervisor: number; agente: number; apoio: number;
