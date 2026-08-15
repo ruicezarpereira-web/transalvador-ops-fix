@@ -1402,7 +1402,7 @@ const Index = () => {
                         const t = totaisLancamento(l);
                         const aberto = detalheId === l.id;
                         return (
-                          <>
+                          <React.Fragment key={l.id}>
                             <TableRow key={l.id}>
                               <TableCell>{new Date(l.createdAt).toLocaleDateString("pt-BR")}</TableCell>
                               <TableCell>{l.servidor.nome} ({l.servidor.matricula})</TableCell>
@@ -1439,7 +1439,7 @@ const Index = () => {
                                 </TableCell>
                               </TableRow>
                             )}
-                          </>
+                          </React.Fragment>
                         );
                       })}
                     </TableBody>
