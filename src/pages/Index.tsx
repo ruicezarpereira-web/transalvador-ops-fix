@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 import ServerCombobox, { Servidor } from "@/components/ServerCombobox";
 import MultiServerSelect from "@/components/MultiServerSelect";
+import Header from "@/components/Header";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
