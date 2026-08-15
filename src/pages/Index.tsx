@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 import ServerCombobox, { Servidor } from "@/components/ServerCombobox";
 import MultiServerSelect from "@/components/MultiServerSelect";
+import Header from "@/components/Header";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -1020,23 +1021,7 @@ const Index = () => {
 
   return (
     <div className="min-h-screen">
-      <header className="border-b bg-gradient-to-br from-background to-card/60">
-        <div className="container py-8">
-          <div className="flex justify-between items-start gap-4">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight">GEOPS - Gerador de Operações Especiais Segep</h1>
-              <p className="text-muted-foreground mt-1">Sistema de Geração e Controle de Operações Especiais.</p>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="text-right">
-                <div className="font-medium">{USUARIO_MASTER}</div>
-                <div className="text-sm text-muted-foreground">Acesso master</div>
-              </div>
-              <Button onClick={logout} variant="outline" size="sm">Sair</Button>
-            </div>
-          </div>
-        </div>
-      </header>
+      <Header onLogout={logout} />
 
       <main className="container py-8">
         <Tabs value={tab} onValueChange={setTab} className="w-full">
