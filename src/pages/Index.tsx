@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1041,10 +1041,10 @@ const Index = () => {
       <main className="container py-8">
         <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="lancamentos">Por Servidor</TabsTrigger>
-            <TabsTrigger value="por-data">Por Data</TabsTrigger>
+            <TabsTrigger value="lancamentos">Lançar por Servidor</TabsTrigger>
+            <TabsTrigger value="por-data">Lançar por Data</TabsTrigger>
             <TabsTrigger value="planilha">Planilha</TabsTrigger>
-            <TabsTrigger value="logs">Histórico</TabsTrigger>
+            <TabsTrigger value="logs">Histórico / Relatórios</TabsTrigger>
             <TabsTrigger value="rh">Banco de Dados e Configurações</TabsTrigger>
           </TabsList>
 
@@ -1402,7 +1402,7 @@ const Index = () => {
                         const t = totaisLancamento(l);
                         const aberto = detalheId === l.id;
                         return (
-                          <>
+                          <React.Fragment key={l.id}>
                             <TableRow key={l.id}>
                               <TableCell>{new Date(l.createdAt).toLocaleDateString("pt-BR")}</TableCell>
                               <TableCell>{l.servidor.nome} ({l.servidor.matricula})</TableCell>
@@ -1439,7 +1439,7 @@ const Index = () => {
                                 </TableCell>
                               </TableRow>
                             )}
-                          </>
+                          </React.Fragment>
                         );
                       })}
                     </TableBody>
