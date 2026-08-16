@@ -81,7 +81,7 @@ export const Header: React.FC<HeaderProps> = ({ onLogout }) => {
                 <TooltipTrigger asChild>
                   <Button
                     onClick={handleSave}
-                    disabled={isSaving || !hasUnsavedChanges}
+                    disabled={isSaving}
                     size="sm"
                     className="gap-2"
                   >
