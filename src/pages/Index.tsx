@@ -171,9 +171,7 @@ const save = (key: string, value: unknown) => localStorage.setItem(key, JSON.str
 
 // Acesso único (usuário único + senha master)
 const USUARIO_MASTER = "RCPPJ";
-const SENHA_MASTER_PADRAO = "ruicpj@123";
-const SECURITY_QUESTION = "My birthday?";
-const SECURITY_ANSWER = "27 de Setembro";
+const SENHA_MASTER_PADRAO = "Segep@Transalvador2026";
 
 // Normalização de cabeçalhos do Excel
 const normalize = (s: any) =>
@@ -242,8 +240,6 @@ const Index = () => {
   const [loginSenha, setLoginSenha] = useState("");
   const [novaSenha, setNovaSenha] = useState("");
   const [confirmarSenha, setConfirmarSenha] = useState("");
-  const [respostaSeguranca, setRespostaSeguranca] = useState("");
-  const [novaSenhaSeguranca, setNovaSenhaSeguranca] = useState("");
   const [sistemaDesbloqueado, setSistemaDesbloqueado] = useState<boolean>(() => load<boolean>("sistemaDesbloqueado", false));
 
   const opcoesOperacao = useMemo(() => buildOpcoes(ano), [ano]);
@@ -429,22 +425,6 @@ const Index = () => {
     setNovaSenha("");
     setConfirmarSenha("");
     toast({ title: "Senha master alterada" });
-  };
-
-  const redefinirSenha = () => {
-    if (respostaSeguranca.trim().toLowerCase() !== SECURITY_ANSWER.toLowerCase()) {
-      toast({ title: "Resposta de segurança incorreta", variant: "destructive" });
-      return;
-    }
-    if (novaSenhaSeguranca.length < 6) {
-      toast({ title: "Nova senha deve ter pelo menos 6 caracteres", variant: "destructive" });
-      return;
-    }
-    save("senhaMaster", novaSenhaSeguranca);
-    setSenhaMaster(novaSenhaSeguranca);
-    setRespostaSeguranca("");
-    setNovaSenhaSeguranca("");
-    toast({ title: "Senha master redefinida" });
   };
 
   const logout = () => {
@@ -995,21 +975,6 @@ const Index = () => {
                 />
               </div>
               <Button onClick={realizarLogin} className="w-full">Entrar</Button>
-
-              <hr className="my-4" />
-
-              <div className="space-y-3">
-                <h4 className="font-medium">Recuperar acesso</h4>
-                <div className="space-y-2">
-                  <Label>Pergunta: {SECURITY_QUESTION}</Label>
-                  <Input value={respostaSeguranca} onChange={(e) => setRespostaSeguranca(e.target.value)} placeholder="Digite a resposta" />
-                </div>
-                <div className="space-y-2">
-                  <Label>Nova senha master</Label>
-                  <Input type="password" value={novaSenhaSeguranca} onChange={(e) => setNovaSenhaSeguranca(e.target.value)} placeholder="Digite a nova senha" />
-                </div>
-                <Button onClick={redefinirSenha} variant="secondary" className="w-full">Redefinir senha master</Button>
-              </div>
             </div>
           </CardContent>
         </Card>
