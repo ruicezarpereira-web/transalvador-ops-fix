@@ -38,6 +38,14 @@ type Lancamento = {
 
 type ValoresOperacao = { [key in FuncaoID]?: number };
 
+type SystemUser = {
+  id: string;
+  nome: string;
+  usuario: string;
+  senha: string;
+  mustChangePassword: boolean;
+};
+
 const valoresDefault = {
   ordinaria: {
     coordenador: 20.5,
@@ -237,10 +245,49 @@ const Index = () => {
   const [alimentacao, setAlimentacao] = useState(() => load("alimentacaoOperacoes", alimentacaoDefault));
 
   // Login
+  const [loginUsuario, setLoginUsuario] = useState<string>(USUARIO_MASTER);
   const [loginSenha, setLoginSenha] = useState("");
   const [novaSenha, setNovaSenha] = useState("");
   const [confirmarSenha, setConfirmarSenha] = useState("");
   const [sistemaDesbloqueado, setSistemaDesbloqueado] = useState<boolean>(() => load<boolean>("sistemaDesbloqueado", false));
+  const [sessaoAtual, setSessaoAtual] = useState<{ usuario: string; role: "master" | "comum"; nome: string } | null>(() =>
+    load("sessaoAtual", null)
+  );
+
+  // Usuários comuns (gestão de usuários — apenas Master)
+  const [usuariosComuns, setUsuariosComuns] = useState<SystemUser[]>(() => load<SystemUser[]>("usuariosComuns", []));
+  const [novoUsuarioNome, setNovoUsuarioNome] = useState("");
+  const [novoUsuarioLogin, setNovoUsuarioLogin] = useState("");
+
+  // Pergunta e resposta de segurança (configurável — nunca fica fixa no código)
+  const [secQuestion, setSecQuestion] = useState<string>(() => load("secQuestion", ""));
+  const [secAnswer, setSecAnswer] = useState<string>(() => load("secAnswer", ""));
+  const [novaSecQuestion, setNovaSecQuestion] = useState("");
+  const [novaSecAnswer, setNovaSecAnswer] = useState("");
+  const [mostrarRecuperacao, setMostrarRecuperacao] = useState(false);
+  const [respostaTentativa, setRespostaTentativa] = useState("");
+  const [novaSenhaRecuperada, setNovaSenhaRecuperada] = useState("");
+
+  // Troca de senha — usuário comum (exige senha atual)
+  const [senhaAtualComum, setSenhaAtualComum] = useState("");
+  const [novaSenhaComum, setNovaSenhaComum] = useState("");
+  const [confirmarSenhaComum, setConfirmarSenhaComum] = useState("");
+
+  // Primeiro acesso após reset (senha padrão "123456")
+  const [primeiraTrocaSenha, setPrimeiraTrocaSenha] = useState("");
+  const [primeiraTrocaSenhaConfirmar, setPrimeiraTrocaSenhaConfirmar] = useState("");
+
+  // Modo escuro
+  const [darkMode, setDarkMode] = useState<boolean>(() => load<boolean>("darkMode", false));
+
+  // Relatórios (Operações e Servidores)
+  const [relTipo, setRelTipo] = useState<"operacoes" | "servidores">("operacoes");
+  const [relFuncao, setRelFuncao] = useState<string>("todas");
+  const [relOperacao, setRelOperacao] = useState<string>("todas");
+  const [relAno, setRelAno] = useState<string>("todos");
+  const [relDataIni, setRelDataIni] = useState("");
+  const [relDataFim, setRelDataFim] = useState("");
+  const [relServidor, setRelServidor] = useState<string>("todos");
 
   const opcoesOperacao = useMemo(() => buildOpcoes(ano), [ano]);
   const selectedOp = useMemo(() => opcoesOperacao.find((o) => o.id === operacaoId), [opcoesOperacao, operacaoId]);
@@ -400,15 +447,36 @@ const Index = () => {
   useEffect(() => save("valoresOperacoes", valores), [valores]);
   useEffect(() => save("alimentacaoOperacoes", alimentacao), [alimentacao]);
   useEffect(() => save("sistemaDesbloqueado", sistemaDesbloqueado), [sistemaDesbloqueado]);
+  useEffect(() => save("sessaoAtual", sessaoAtual), [sessaoAtual]);
+  useEffect(() => save("usuariosComuns", usuariosComuns), [usuariosComuns]);
+  useEffect(() => save("secQuestion", secQuestion), [secQuestion]);
+  useEffect(() => save("secAnswer", secAnswer), [secAnswer]);
+  useEffect(() => save("darkMode", darkMode), [darkMode]);
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", darkMode);
+  }, [darkMode]);
 
   const realizarLogin = () => {
-    if (loginSenha === senhaMaster) {
-      setSistemaDesbloqueado(true);
-      setLoginSenha("");
-      toast({ title: "Acesso liberado", description: `Bem-vindo, ${USUARIO_MASTER}.` });
+    if (loginUsuario === USUARIO_MASTER) {
+      if (loginSenha === senhaMaster) {
+        setSessaoAtual({ usuario: USUARIO_MASTER, role: "master", nome: "RCPPJ" });
+        setSistemaDesbloqueado(true);
+        setLoginSenha("");
+        toast({ title: "Acesso liberado", description: `Bem-vindo, ${USUARIO_MASTER}.` });
+        return;
+      }
+      toast({ title: "Senha master inválida", variant: "destructive" });
       return;
     }
-    toast({ title: "Senha master inválida", variant: "destructive" });
+    const usuario = usuariosComuns.find((u) => u.usuario.toLowerCase() === loginUsuario.trim().toLowerCase());
+    if (usuario && usuario.senha === loginSenha) {
+      setSessaoAtual({ usuario: usuario.usuario, role: "comum", nome: usuario.nome });
+      setSistemaDesbloqueado(true);
+      setLoginSenha("");
+      toast({ title: "Acesso liberado", description: `Bem-vindo, ${usuario.nome}.` });
+      return;
+    }
+    toast({ title: "Usuário ou senha inválidos", variant: "destructive" });
   };
 
   const alterarSenha = () => {
@@ -427,8 +495,119 @@ const Index = () => {
     toast({ title: "Senha master alterada" });
   };
 
+  // Pergunta/resposta de segurança — definidas pelo próprio Master, nunca fixas no código
+  const definirPerguntaSeguranca = () => {
+    if (!novaSecQuestion.trim() || !novaSecAnswer.trim()) {
+      toast({ title: "Preencha a pergunta e a resposta", variant: "destructive" });
+      return;
+    }
+    setSecQuestion(novaSecQuestion.trim());
+    setSecAnswer(novaSecAnswer.trim());
+    setNovaSecQuestion("");
+    setNovaSecAnswer("");
+    toast({ title: "Pergunta de segurança definida" });
+  };
+
+  const redefinirSenhaComPergunta = () => {
+    if (!secAnswer) {
+      toast({ title: "Nenhuma pergunta de segurança configurada", variant: "destructive" });
+      return;
+    }
+    if (respostaTentativa.trim().toLowerCase() !== secAnswer.toLowerCase()) {
+      toast({ title: "Resposta de segurança incorreta", variant: "destructive" });
+      return;
+    }
+    if (novaSenhaRecuperada.length < 6) {
+      toast({ title: "Nova senha deve ter pelo menos 6 caracteres", variant: "destructive" });
+      return;
+    }
+    save("senhaMaster", novaSenhaRecuperada);
+    setSenhaMaster(novaSenhaRecuperada);
+    setRespostaTentativa("");
+    setNovaSenhaRecuperada("");
+    setMostrarRecuperacao(false);
+    toast({ title: "Senha master redefinida" });
+  };
+
+  // Gestão de usuários (apenas Master)
+  const criarUsuarioComum = () => {
+    if (!novoUsuarioNome.trim() || !novoUsuarioLogin.trim()) {
+      toast({ title: "Preencha nome e usuário de login", variant: "destructive" });
+      return;
+    }
+    const loginNormalizado = novoUsuarioLogin.trim();
+    if (loginNormalizado.toLowerCase() === USUARIO_MASTER.toLowerCase() || usuariosComuns.some((u) => u.usuario.toLowerCase() === loginNormalizado.toLowerCase())) {
+      toast({ title: "Já existe um usuário com esse login", variant: "destructive" });
+      return;
+    }
+    const novo: SystemUser = {
+      id: crypto.randomUUID(),
+      nome: novoUsuarioNome.trim(),
+      usuario: loginNormalizado,
+      senha: "123456",
+      mustChangePassword: true,
+    };
+    setUsuariosComuns((prev) => [...prev, novo]);
+    setNovoUsuarioNome("");
+    setNovoUsuarioLogin("");
+    toast({ title: "Usuário criado", description: `Senha padrão: 123456` });
+  };
+
+  const resetarSenhaUsuario = (id: string) => {
+    setUsuariosComuns((prev) => prev.map((u) => (u.id === id ? { ...u, senha: "123456", mustChangePassword: true } : u)));
+    toast({ title: "Senha redefinida para 123456" });
+  };
+
+  const excluirUsuarioComum = (id: string) => {
+    setUsuariosComuns((prev) => prev.filter((u) => u.id !== id));
+    toast({ title: "Usuário excluído" });
+  };
+
+  // Troca de senha do usuário comum (exige confirmação da senha atual)
+  const alterarSenhaUsuarioComum = () => {
+    if (!sessaoAtual || sessaoAtual.role !== "comum") return;
+    const usuarioAtual = usuariosComuns.find((u) => u.usuario === sessaoAtual.usuario);
+    if (!usuarioAtual || usuarioAtual.senha !== senhaAtualComum) {
+      toast({ title: "Senha atual incorreta", variant: "destructive" });
+      return;
+    }
+    if (novaSenhaComum !== confirmarSenhaComum) {
+      toast({ title: "Senhas não coincidem", variant: "destructive" });
+      return;
+    }
+    if (novaSenhaComum.length < 6) {
+      toast({ title: "Senha deve ter pelo menos 6 caracteres", variant: "destructive" });
+      return;
+    }
+    setUsuariosComuns((prev) => prev.map((u) => (u.id === usuarioAtual.id ? { ...u, senha: novaSenhaComum, mustChangePassword: false } : u)));
+    setSenhaAtualComum("");
+    setNovaSenhaComum("");
+    setConfirmarSenhaComum("");
+    toast({ title: "Senha alterada com sucesso" });
+  };
+
+  // Troca obrigatória após reset pelo Master (login com senha padrão 123456)
+  const confirmarPrimeiraTroca = () => {
+    if (!sessaoAtual || sessaoAtual.role !== "comum") return;
+    const usuarioAtual = usuariosComuns.find((u) => u.usuario === sessaoAtual.usuario);
+    if (!usuarioAtual) return;
+    if (primeiraTrocaSenha !== primeiraTrocaSenhaConfirmar) {
+      toast({ title: "Senhas não coincidem", variant: "destructive" });
+      return;
+    }
+    if (primeiraTrocaSenha.length < 6) {
+      toast({ title: "Senha deve ter pelo menos 6 caracteres", variant: "destructive" });
+      return;
+    }
+    setUsuariosComuns((prev) => prev.map((u) => (u.id === usuarioAtual.id ? { ...u, senha: primeiraTrocaSenha, mustChangePassword: false } : u)));
+    setPrimeiraTrocaSenha("");
+    setPrimeiraTrocaSenhaConfirmar("");
+    toast({ title: "Senha definida com sucesso" });
+  };
+
   const logout = () => {
     setSistemaDesbloqueado(false);
+    setSessaoAtual(null);
     toast({ title: "Sessão encerrada" });
   };
 
@@ -447,6 +626,14 @@ const Index = () => {
     localStorage.removeItem("lancamentos");
     toast({ title: "Dados limpos" });
   };
+
+  // Soma de horas já lançadas para um servidor numa data específica (considerando outros lançamentos)
+  const horasJaLancadasNoDia = (matricula: string, data: string, excluirLancamentoId?: string) =>
+    lancamentos
+      .filter((l) => l.servidor.matricula === matricula && (!excluirLancamentoId || l.id !== excluirLancamentoId))
+      .flatMap((l) => l.dias)
+      .filter((d) => d.data === data)
+      .reduce((sum, d) => sum + d.horas, 0);
 
   // CRUD de dias (lançamento por servidor)
   const adicionarDia = () => {
@@ -490,6 +677,18 @@ const Index = () => {
     const foraPeriodo = diasValidos.find((d) => d.data < periodo.inicio || d.data > periodo.fim);
     if (foraPeriodo) {
       toast({ title: "Data fora do período", variant: "destructive" });
+      return;
+    }
+
+    const diaExcede24h = diasValidos.find(
+      (d) => horasJaLancadasNoDia(srv.matricula, d.data, editingId ?? undefined) + d.horas > 24
+    );
+    if (diaExcede24h) {
+      toast({
+        title: "Limite de 24h excedido",
+        description: `${srv.nome} já ultrapassaria 24h em ${toBR(diaExcede24h.data)}. Ajuste as horas desse dia.`,
+        variant: "destructive",
+      });
       return;
     }
 
@@ -561,6 +760,15 @@ const Index = () => {
           // Servidor com data(s) já lançada(s): NÃO é lançado e o erro é apontado.
           conflitos.push(
             `${srv.nome} (${srv.matricula}) — já possui lançamento em ${datasConflitantes.map(toBR).join(", ")}`
+          );
+          bloqueados.push(mat);
+          return;
+        }
+
+        const datasExcedendo24h = loteDatas.filter((data) => horasJaLancadasNoDia(mat, data) + loteHoras > 24);
+        if (datasExcedendo24h.length > 0) {
+          conflitos.push(
+            `${srv.nome} (${srv.matricula}) — ultrapassaria 24h em ${datasExcedendo24h.map(toBR).join(", ")}`
           );
           bloqueados.push(mat);
           return;
@@ -662,6 +870,69 @@ const Index = () => {
     [lancamentos]
   );
 
+  // Módulo de Relatórios — dados achatados por dia trabalhado
+  const diasFlat = useMemo(
+    () =>
+      lancamentos.flatMap((l) =>
+        l.dias.map((d) => ({
+          matricula: l.servidor.matricula,
+          nome: l.servidor.nome,
+          cpf: l.servidor.cpf || "",
+          nomeOperacao: l.nomeOperacao,
+          data: d.data,
+          ano: d.data.slice(0, 4),
+          funcao: d.funcao,
+          horas: d.horas,
+          valor: d.horas * valorHora(d.funcao, l.operacao),
+          alimentacao: calcAlimentacao(l.operacao, d.horas),
+        }))
+      ),
+    [lancamentos, valores, alimentacao]
+  );
+
+  const funcoesUsadas = useMemo(
+    () => Array.from(new Set(diasFlat.map((d) => d.funcao))),
+    [diasFlat]
+  );
+  const anosRelatorio = useMemo(
+    () => Array.from(new Set(diasFlat.map((d) => d.ano))).sort(),
+    [diasFlat]
+  );
+
+  const relatorioFiltrado = useMemo(
+    () =>
+      diasFlat.filter(
+        (d) =>
+          (relFuncao === "todas" || d.funcao === relFuncao) &&
+          (relOperacao === "todas" || d.nomeOperacao === relOperacao) &&
+          (relAno === "todos" || d.ano === relAno) &&
+          (!relDataIni || d.data >= relDataIni) &&
+          (!relDataFim || d.data <= relDataFim) &&
+          (relTipo === "operacoes" || relServidor === "todos" || d.matricula === relServidor)
+      ),
+    [diasFlat, relFuncao, relOperacao, relAno, relDataIni, relDataFim, relTipo, relServidor]
+  );
+
+  const relatorioAgrupadoOperacoes = useMemo(() => {
+    const map = new Map<string, { operacao: string; registros: number; horas: number; valor: number; alimentacao: number }>();
+    relatorioFiltrado.forEach((d) => {
+      if (!map.has(d.nomeOperacao)) map.set(d.nomeOperacao, { operacao: d.nomeOperacao, registros: 0, horas: 0, valor: 0, alimentacao: 0 });
+      const row = map.get(d.nomeOperacao)!;
+      row.registros += 1; row.horas += d.horas; row.valor += d.valor; row.alimentacao += d.alimentacao;
+    });
+    return Array.from(map.values());
+  }, [relatorioFiltrado]);
+
+  const relatorioAgrupadoServidores = useMemo(() => {
+    const map = new Map<string, { matricula: string; nome: string; registros: number; horas: number; valor: number; alimentacao: number }>();
+    relatorioFiltrado.forEach((d) => {
+      if (!map.has(d.matricula)) map.set(d.matricula, { matricula: d.matricula, nome: d.nome, registros: 0, horas: 0, valor: 0, alimentacao: 0 });
+      const row = map.get(d.matricula)!;
+      row.registros += 1; row.horas += d.horas; row.valor += d.valor; row.alimentacao += d.alimentacao;
+    });
+    return Array.from(map.values()).sort((a, b) => a.nome.localeCompare(b.nome));
+  }, [relatorioFiltrado]);
+
   const contatoRodape = [contatos.telefone1, contatos.telefone2].filter(Boolean).join(" • ");
 
   // Totais de um lançamento
@@ -736,6 +1007,50 @@ const Index = () => {
     drawFooters(doc, contatoRodape);
     doc.save(`Extrato_${l.servidor.matricula}.pdf`);
     toast({ title: "Extrato gerado" });
+  };
+
+  // PDF — Módulo de relatórios (Operações / Servidores) com filtros
+  const gerarRelatorioModuloPDF = () => {
+    if (relatorioFiltrado.length === 0) {
+      toast({ title: "Nenhum dado para o filtro selecionado", variant: "destructive" });
+      return;
+    }
+    const doc = new jsPDF({ orientation: "landscape" });
+    const subtitulo = [
+      relOperacao === "todas" ? "Todas as operações" : relOperacao,
+      relAno === "todos" ? "Todos os anos" : relAno,
+      relFuncao === "todas" ? "" : funcaoLabel(relFuncao as FuncaoID),
+    ].filter(Boolean).join(" • ");
+
+    let y = drawHeader(doc, relTipo === "operacoes" ? "Relatório de Operações Lançadas" : "Relatório Individualizado de Servidores", subtitulo);
+
+    if (relTipo === "operacoes") {
+      const acc = relatorioAgrupadoOperacoes.reduce((a, r) => ({ h: a.h + r.horas, v: a.v + r.valor, al: a.al + r.alimentacao }), { h: 0, v: 0, al: 0 });
+      const rows = relatorioAgrupadoOperacoes.map((r) => [r.operacao, String(r.registros), r.horas.toFixed(2), fmtBRL(r.valor), fmtBRL(r.alimentacao), fmtBRL(r.valor + r.alimentacao)]);
+      autoTable(doc, {
+        startY: y,
+        head: [["Operação", "Registros", "Horas", "Valor Horas", "Alimentação", "Total"]],
+        body: rows,
+        foot: [["TOTAL GERAL", "", acc.h.toFixed(2), fmtBRL(acc.v), fmtBRL(acc.al), fmtBRL(acc.v + acc.al)]],
+        margin: { left: 14, right: 14 },
+        ...(tableTheme as any),
+      });
+    } else {
+      const acc = relatorioAgrupadoServidores.reduce((a, r) => ({ h: a.h + r.horas, v: a.v + r.valor, al: a.al + r.alimentacao }), { h: 0, v: 0, al: 0 });
+      const rows = relatorioAgrupadoServidores.map((r) => [r.matricula, r.nome, String(r.registros), r.horas.toFixed(2), fmtBRL(r.valor), fmtBRL(r.alimentacao), fmtBRL(r.valor + r.alimentacao)]);
+      autoTable(doc, {
+        startY: y,
+        head: [["Matrícula", "Nome", "Registros", "Horas", "Valor Horas", "Alimentação", "Total"]],
+        body: rows,
+        foot: [["", "TOTAL GERAL", "", acc.h.toFixed(2), fmtBRL(acc.v), fmtBRL(acc.al), fmtBRL(acc.v + acc.al)]],
+        margin: { left: 14, right: 14 },
+        ...(tableTheme as any),
+      });
+    }
+
+    drawFooters(doc, contatoRodape);
+    doc.save(`Relatorio_${relTipo}.pdf`);
+    toast({ title: "Relatório gerado" });
   };
 
   // PDF — Relatório do histórico de lançamentos
@@ -962,19 +1277,86 @@ const Index = () => {
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label>Usuário</Label>
-                <Input value={USUARIO_MASTER} readOnly disabled />
+                <Input
+                  value={loginUsuario}
+                  onChange={(e) => setLoginUsuario(e.target.value)}
+                  placeholder="Usuário"
+                />
               </div>
               <div className="space-y-2">
-                <Label>Senha master</Label>
+                <Label>Senha</Label>
                 <Input
                   type="password"
                   value={loginSenha}
                   onChange={(e) => setLoginSenha(e.target.value)}
-                  placeholder="Digite a senha master"
+                  placeholder="Digite sua senha"
                   onKeyDown={(e) => e.key === "Enter" && realizarLogin()}
                 />
               </div>
               <Button onClick={realizarLogin} className="w-full">Entrar</Button>
+
+              {loginUsuario === USUARIO_MASTER && (
+                <div className="text-center">
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground underline"
+                    onClick={() => setMostrarRecuperacao((v) => !v)}
+                  >
+                    Esqueci minha senha
+                  </button>
+                </div>
+              )}
+
+              {loginUsuario === USUARIO_MASTER && mostrarRecuperacao && (
+                <div className="space-y-3 border-t pt-4">
+                  {!secAnswer ? (
+                    <p className="text-xs text-muted-foreground">
+                      Nenhuma pergunta de segurança foi configurada ainda. Entre com a senha master e configure uma em Configurações.
+                    </p>
+                  ) : (
+                    <>
+                      <h4 className="font-medium text-sm">Recuperar acesso</h4>
+                      <div className="space-y-2">
+                        <Label>Pergunta: {secQuestion}</Label>
+                        <Input value={respostaTentativa} onChange={(e) => setRespostaTentativa(e.target.value)} placeholder="Digite a resposta" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Nova senha master</Label>
+                        <Input type="password" value={novaSenhaRecuperada} onChange={(e) => setNovaSenhaRecuperada(e.target.value)} placeholder="Digite a nova senha" />
+                      </div>
+                      <Button onClick={redefinirSenhaComPergunta} variant="secondary" className="w-full">Redefinir senha master</Button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Troca obrigatória de senha após reset pelo Master (usuário comum logado com "123456")
+  if (sessaoAtual?.role === "comum" && usuariosComuns.find((u) => u.usuario === sessaoAtual.usuario)?.mustChangePassword) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background to-card/60">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl mb-2">Defina sua senha</CardTitle>
+            <p className="text-muted-foreground text-sm">Sua senha foi redefinida pelo administrador. Escolha uma nova senha para continuar.</p>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Nova senha</Label>
+                <Input type="password" value={primeiraTrocaSenha} onChange={(e) => setPrimeiraTrocaSenha(e.target.value)} placeholder="Digite a nova senha" />
+              </div>
+              <div className="space-y-2">
+                <Label>Confirmar nova senha</Label>
+                <Input type="password" value={primeiraTrocaSenhaConfirmar} onChange={(e) => setPrimeiraTrocaSenhaConfirmar(e.target.value)} placeholder="Confirme a nova senha" />
+              </div>
+              <Button onClick={confirmarPrimeiraTroca} className="w-full">Definir senha e continuar</Button>
+              <Button onClick={logout} variant="outline" className="w-full">Sair</Button>
             </div>
           </CardContent>
         </Card>
@@ -986,16 +1368,22 @@ const Index = () => {
 
   return (
     <div className="min-h-screen">
-      <Header onLogout={logout} />
+      <Header
+        onLogout={logout}
+        darkMode={darkMode}
+        onToggleDarkMode={() => setDarkMode((v) => !v)}
+        usuarioLogado={sessaoAtual?.nome}
+      />
 
       <main className="container py-8">
         <Tabs value={tab} onValueChange={setTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="lancamentos">Lançar por Servidor</TabsTrigger>
-            <TabsTrigger value="por-data">Lançar por Data</TabsTrigger>
-            <TabsTrigger value="planilha">Planilha</TabsTrigger>
-            <TabsTrigger value="logs">Histórico / Relatórios</TabsTrigger>
-            <TabsTrigger value="rh">Banco de Dados e Configurações</TabsTrigger>
+          <TabsList className="flex w-full flex-wrap h-auto items-stretch gap-1.5 p-1.5">
+            <TabsTrigger value="lancamentos" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Lançar por Servidor</TabsTrigger>
+            <TabsTrigger value="por-data" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Lançar por Data</TabsTrigger>
+            <TabsTrigger value="planilha" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Planilha</TabsTrigger>
+            <TabsTrigger value="relatorios" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Relatórios</TabsTrigger>
+            <TabsTrigger value="logs" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Histórico</TabsTrigger>
+            <TabsTrigger value="rh" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Configurações</TabsTrigger>
           </TabsList>
 
           {/* Lançamento por servidor */}
@@ -1399,9 +1787,177 @@ const Index = () => {
             </Card>
           </TabsContent>
 
+          {/* Relatórios de Operações e Servidores */}
+          <TabsContent value="relatorios" className="mt-6">
+            <Card>
+              <CardHeader><CardTitle>Relatórios</CardTitle></CardHeader>
+              <CardContent>
+                <div className="flex gap-2 mb-4">
+                  <Button variant={relTipo === "operacoes" ? "default" : "outline"} onClick={() => setRelTipo("operacoes")}>Operações Lançadas</Button>
+                  <Button variant={relTipo === "servidores" ? "default" : "outline"} onClick={() => setRelTipo("servidores")}>Individualizado de Servidores</Button>
+                </div>
+
+                <div className="grid md:grid-cols-5 gap-3 mb-4">
+                  {relTipo === "servidores" && (
+                    <div className="space-y-1">
+                      <Label className="text-xs">Servidor</Label>
+                      <Select value={relServidor} onValueChange={setRelServidor}>
+                        <SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger>
+                        <SelectContent className="z-50">
+                          <SelectItem value="todos">Todos os servidores</SelectItem>
+                          {[...servidores].sort((a, b) => a.nome.localeCompare(b.nome)).map((s) => (
+                            <SelectItem key={s.matricula} value={s.matricula}>{s.nome}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    <Label className="text-xs">Função</Label>
+                    <Select value={relFuncao} onValueChange={setRelFuncao}>
+                      <SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger>
+                      <SelectContent className="z-50">
+                        <SelectItem value="todas">Todas as funções</SelectItem>
+                        {funcoesUsadas.map((f) => (<SelectItem key={f} value={f}>{funcaoLabel(f)}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Operação</Label>
+                    <Select value={relOperacao} onValueChange={setRelOperacao}>
+                      <SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger>
+                      <SelectContent className="z-50">
+                        <SelectItem value="todas">Todas</SelectItem>
+                        {nomesOperacoesConsolidadas.map((n) => (<SelectItem key={n} value={n}>{n}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Ano</Label>
+                    <Select value={relAno} onValueChange={setRelAno}>
+                      <SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger>
+                      <SelectContent className="z-50">
+                        <SelectItem value="todos">Todos os anos</SelectItem>
+                        {anosRelatorio.map((a) => (<SelectItem key={a} value={a}>{a}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Período (início)</Label>
+                    <Input type="date" value={relDataIni} onChange={(e) => setRelDataIni(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Período (fim)</Label>
+                    <Input type="date" value={relDataFim} onChange={(e) => setRelDataFim(e.target.value)} />
+                  </div>
+                </div>
+
+                <div className="flex gap-2 mb-4 flex-wrap">
+                  <Button onClick={gerarRelatorioModuloPDF}>Exportar PDF</Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => { setRelFuncao("todas"); setRelOperacao("todas"); setRelAno("todos"); setRelDataIni(""); setRelDataFim(""); setRelServidor("todos"); }}
+                  >
+                    Limpar filtros (Geral)
+                  </Button>
+                </div>
+
+                {relTipo === "operacoes" ? (
+                  <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Operação</TableHead>
+                          <TableHead>Registros</TableHead>
+                          <TableHead>Horas</TableHead>
+                          <TableHead>Valor Horas</TableHead>
+                          <TableHead>Alimentação</TableHead>
+                          <TableHead>Total</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {relatorioAgrupadoOperacoes.length === 0 && (
+                          <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">Nenhum dado para o filtro selecionado.</TableCell></TableRow>
+                        )}
+                        {relatorioAgrupadoOperacoes.map((r) => (
+                          <TableRow key={r.operacao}>
+                            <TableCell>{r.operacao}</TableCell>
+                            <TableCell>{r.registros}</TableCell>
+                            <TableCell>{r.horas.toFixed(2)}</TableCell>
+                            <TableCell>{fmtBRL(r.valor)}</TableCell>
+                            <TableCell>{fmtBRL(r.alimentacao)}</TableCell>
+                            <TableCell>{fmtBRL(r.valor + r.alimentacao)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : (
+                  <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Matrícula</TableHead>
+                          <TableHead>Nome</TableHead>
+                          <TableHead>Registros</TableHead>
+                          <TableHead>Horas</TableHead>
+                          <TableHead>Valor Horas</TableHead>
+                          <TableHead>Alimentação</TableHead>
+                          <TableHead>Total</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {relatorioAgrupadoServidores.length === 0 && (
+                          <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">Nenhum dado para o filtro selecionado.</TableCell></TableRow>
+                        )}
+                        {relatorioAgrupadoServidores.map((r) => (
+                          <TableRow key={r.matricula}>
+                            <TableCell>{r.matricula}</TableCell>
+                            <TableCell>{r.nome}</TableCell>
+                            <TableCell>{r.registros}</TableCell>
+                            <TableCell>{r.horas.toFixed(2)}</TableCell>
+                            <TableCell>{fmtBRL(r.valor)}</TableCell>
+                            <TableCell>{fmtBRL(r.alimentacao)}</TableCell>
+                            <TableCell>{fmtBRL(r.valor + r.alimentacao)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           {/* Banco de Dados / Configurações */}
           <TabsContent value="rh" className="mt-6">
+            {sessaoAtual?.role === "comum" ? (
+              <div className="grid gap-6 max-w-xl">
+                <Card>
+                  <CardHeader><CardTitle>Minha conta</CardTitle></CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="text-sm text-muted-foreground">Usuário: <span className="font-medium text-foreground">{sessaoAtual.nome}</span></div>
+                    <div className="space-y-3">
+                      <h4 className="font-medium">Alterar minha senha</h4>
+                      <div className="space-y-2">
+                        <Label>Senha atual</Label>
+                        <Input type="password" value={senhaAtualComum} onChange={(e) => setSenhaAtualComum(e.target.value)} placeholder="Digite a senha atual" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Nova senha</Label>
+                        <Input type="password" value={novaSenhaComum} onChange={(e) => setNovaSenhaComum(e.target.value)} placeholder="Digite a nova senha" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Confirmar nova senha</Label>
+                        <Input type="password" value={confirmarSenhaComum} onChange={(e) => setConfirmarSenhaComum(e.target.value)} placeholder="Confirme a nova senha" />
+                      </div>
+                      <Button onClick={alterarSenhaUsuarioComum} variant="secondary" className="w-full">Alterar senha</Button>
+                    </div>
+                    <Button onClick={logout} variant="destructive" className="w-full">Sair</Button>
+                  </CardContent>
+                </Card>
+              </div>
+            ) : (
             <div className="grid gap-6 md:grid-cols-2">
               <Card>
                 <CardHeader><CardTitle>Acesso</CardTitle></CardHeader>
@@ -1418,6 +1974,21 @@ const Index = () => {
                       <Input type="password" value={confirmarSenha} onChange={(e) => setConfirmarSenha(e.target.value)} placeholder="Confirme a nova senha" />
                     </div>
                     <Button onClick={alterarSenha} variant="secondary" className="w-full">Alterar senha master</Button>
+                  </div>
+                  <div className="space-y-3 border-t pt-4">
+                    <h4 className="font-medium">Pergunta de segurança (recuperação de senha)</h4>
+                    {secQuestion && (
+                      <div className="text-xs text-muted-foreground">Pergunta atual: <span className="text-foreground">{secQuestion}</span></div>
+                    )}
+                    <div className="space-y-2">
+                      <Label>Nova pergunta</Label>
+                      <Input value={novaSecQuestion} onChange={(e) => setNovaSecQuestion(e.target.value)} placeholder="Ex.: Qual o nome do seu primeiro animal de estimação?" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Nova resposta</Label>
+                      <Input value={novaSecAnswer} onChange={(e) => setNovaSecAnswer(e.target.value)} placeholder="Resposta" />
+                    </div>
+                    <Button onClick={definirPerguntaSeguranca} variant="secondary" className="w-full">Salvar pergunta de segurança</Button>
                   </div>
                   <Button onClick={logout} variant="destructive" className="w-full">Sair</Button>
                 </CardContent>
@@ -1570,6 +2141,59 @@ const Index = () => {
               </Card>
 
               <Card className="md:col-span-2">
+                <CardHeader><CardTitle>Gerenciamento de Usuários</CardTitle></CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex gap-2 flex-wrap items-end">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Nome completo</Label>
+                      <Input value={novoUsuarioNome} onChange={(e) => setNovoUsuarioNome(e.target.value)} placeholder="Nome do novo usuário" className="w-56" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Usuário (login)</Label>
+                      <Input value={novoUsuarioLogin} onChange={(e) => setNovoUsuarioLogin(e.target.value)} placeholder="login.usuario" className="w-48" />
+                    </div>
+                    <Button onClick={criarUsuarioComum}>+ Criar usuário</Button>
+                  </div>
+                  <div className="text-xs text-muted-foreground">Todo usuário novo é criado com a senha padrão "123456" e deve trocá-la no primeiro acesso.</div>
+
+                  <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Nome</TableHead>
+                          <TableHead>Usuário</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Ações</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {usuariosComuns.length === 0 && (
+                          <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground">Nenhum usuário comum cadastrado.</TableCell></TableRow>
+                        )}
+                        {usuariosComuns.map((u) => (
+                          <TableRow key={u.id}>
+                            <TableCell>{u.nome}</TableCell>
+                            <TableCell>{u.usuario}</TableCell>
+                            <TableCell>
+                              {u.mustChangePassword ? (
+                                <Badge variant="outline" className="bg-amber-100 text-amber-900 border-amber-300">Aguardando 1º acesso</Badge>
+                              ) : (
+                                <Badge variant="outline" className="bg-emerald-100 text-emerald-900 border-emerald-300">Ativo</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="flex gap-2 flex-wrap">
+                              <Button size="sm" variant="secondary" onClick={() => resetarSenhaUsuario(u.id)}>Resetar senha</Button>
+                              <Button size="sm" variant="destructive" onClick={() => excluirUsuarioComum(u.id)}>Excluir</Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="md:col-span-2">
                 <CardHeader><CardTitle>Sobre</CardTitle></CardHeader>
                 <CardContent className="space-y-1 text-sm">
                   <p>GEOPS - Gerador de Operações Especiais Segep.</p>
@@ -1578,6 +2202,7 @@ const Index = () => {
                 </CardContent>
               </Card>
             </div>
+            )}
           </TabsContent>
         </Tabs>
       </main>

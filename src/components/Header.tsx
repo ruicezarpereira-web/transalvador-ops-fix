@@ -16,13 +16,18 @@ import {
   Loader2,
   LogOut,
   Shield,
+  Moon,
+  Sun,
 } from "lucide-react";
 
 interface HeaderProps {
   onLogout?: () => void;
+  darkMode?: boolean;
+  onToggleDarkMode?: () => void;
+  usuarioLogado?: string;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onLogout }) => {
+export const Header: React.FC<HeaderProps> = ({ onLogout, darkMode, onToggleDarkMode, usuarioLogado }) => {
   const { hasUnsavedChanges, isSaving, salvarDados } = useData();
 
   const handleSave = async () => {
@@ -107,6 +112,31 @@ export const Header: React.FC<HeaderProps> = ({ onLogout }) => {
               </Tooltip>
             </TooltipProvider>
 
+            {onToggleDarkMode && (
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      onClick={onToggleDarkMode}
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                    >
+                      {darkMode ? (
+                        <Sun className="h-4 w-4" aria-hidden="true" />
+                      ) : (
+                        <Moon className="h-4 w-4" aria-hidden="true" />
+                      )}
+                      <span className="hidden md:inline">{darkMode ? "Claro" : "Escuro"}</span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <p>Alternar tema</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+
             {onLogout && (
               <Button
                 onClick={onLogout}
@@ -122,8 +152,8 @@ export const Header: React.FC<HeaderProps> = ({ onLogout }) => {
             <div className="hidden lg:flex items-center gap-2 text-right pl-2 border-l">
               <Shield className="h-4 w-4 text-muted-foreground" />
               <div>
-                <div className="text-sm font-medium">RCPPJ</div>
-                <div className="text-xs text-muted-foreground">Acesso master</div>
+                <div className="text-sm font-medium">{usuarioLogado || "RCPPJ"}</div>
+                <div className="text-xs text-muted-foreground">Acesso ao sistema</div>
               </div>
             </div>
           </div>
