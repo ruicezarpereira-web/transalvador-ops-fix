@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
-import ServerCombobox, { Servidor } from "@/components/ServerCombobox";
+import type { Servidor } from "@/components/ServerCombobox";
 import MultiServerSelect from "@/components/MultiServerSelect";
 import Header from "@/components/Header";
 import * as XLSX from "xlsx";
@@ -222,7 +222,7 @@ const Index = () => {
   const [operacaoId, setOperacaoId] = useState<string>(initialOps[0]?.id ?? "");
   const [periodo, setPeriodo] = useState({ inicio: initialOps[0]?.inicio ?? "", fim: initialOps[0]?.fim ?? "" });
   const [periodoCustomizado, setPeriodoCustomizado] = useState({ inicio: "", fim: "" });
-  const [matriculaSelecionada, setMatriculaSelecionada] = useState<string | undefined>(undefined);
+  const [matriculasSelecionadas, setMatriculasSelecionadas] = useState<string[]>([]);
   const [dias, setDias] = useState<DiaTrabalho[]>([{ data: initialOps[0]?.inicio ?? "", horas: 8, funcao: "coordenador" }]);
 
   // Lançamento por data (lote)
@@ -280,14 +280,14 @@ const Index = () => {
   // Modo escuro
   const [darkMode, setDarkMode] = useState<boolean>(() => load<boolean>("darkMode", false));
 
-  // Relatórios (Operações e Servidores)
-  const [relTipo, setRelTipo] = useState<"operacoes" | "servidores">("operacoes");
+  // Relatórios (Relatório Geral por servidor/operação)
   const [relFuncao, setRelFuncao] = useState<string>("todas");
   const [relOperacao, setRelOperacao] = useState<string>("todas");
   const [relAno, setRelAno] = useState<string>("todos");
   const [relDataIni, setRelDataIni] = useState("");
   const [relDataFim, setRelDataFim] = useState("");
   const [relServidor, setRelServidor] = useState<string>("todos");
+  const [relIncluirDetalhes, setRelIncluirDetalhes] = useState(false);
 
   const opcoesOperacao = useMemo(() => buildOpcoes(ano), [ano]);
   const selectedOp = useMemo(() => opcoesOperacao.find((o) => o.id === operacaoId), [opcoesOperacao, operacaoId]);
@@ -671,13 +671,12 @@ const Index = () => {
     setDias((d) => d.map((dia, i) => (i === index ? { ...dia, ...patch } : dia)));
 
   const salvarLancamento = async () => {
-    if (!matriculaSelecionada) {
-      toast({ title: "Selecione um servidor válido", variant: "destructive" });
+    if (matriculasSelecionadas.length === 0) {
+      toast({ title: "Selecione ao menos um servidor", variant: "destructive" });
       return;
     }
-    const srv = servidores.find((s) => s.matricula === matriculaSelecionada);
-    if (!srv) {
-      toast({ title: "Servidor não encontrado", variant: "destructive" });
+    if (editingId && matriculasSelecionadas.length > 1) {
+      toast({ title: "Ao editar um lançamento, selecione apenas um servidor", variant: "destructive" });
       return;
     }
     const diasValidos = dias.filter((d) => d.data && d.horas > 0);
@@ -690,49 +689,81 @@ const Index = () => {
       toast({ title: "Datas repetidas", description: "Remova dias duplicados no lançamento.", variant: "destructive" });
       return;
     }
-    const datasSet = new Set(datas);
-    const conflito = lancamentos.some((l) => {
-      if (editingId && l.id === editingId) return false;
-      if (l.servidor.matricula !== srv.matricula) return false;
-      return l.dias.some((d) => datasSet.has(d.data));
-    });
-    if (conflito) {
-      toast({ title: "Conflito de datas", description: "Já existe lançamento para este servidor em uma das datas.", variant: "destructive" });
-      return;
-    }
     const foraPeriodo = diasValidos.find((d) => d.data < periodo.inicio || d.data > periodo.fim);
     if (foraPeriodo) {
       toast({ title: "Data fora do período", variant: "destructive" });
       return;
     }
 
-    const diaExcede24h = diasValidos.find(
-      (d) => horasJaLancadasNoDia(srv.matricula, d.data, editingId ?? undefined) + d.horas > 24
-    );
-    if (diaExcede24h) {
+    const conflitos: string[] = [];
+    const bloqueados: string[] = [];
+    let criados = 0;
+    let atualizados = 0;
+
+    setLancamentos((prev) => {
+      const next = [...prev];
+      matriculasSelecionadas.forEach((mat) => {
+        const srv = servidores.find((s) => s.matricula === mat);
+        if (!srv) return;
+
+        const datasSet = new Set(datas);
+        const conflito = next.some((l) => {
+          if (editingId && l.id === editingId) return false;
+          if (l.servidor.matricula !== srv.matricula) return false;
+          return l.dias.some((d) => datasSet.has(d.data));
+        });
+        if (conflito) {
+          conflitos.push(`${srv.nome} (${srv.matricula}) — já possui lançamento em uma dessas datas`);
+          bloqueados.push(mat);
+          return;
+        }
+
+        const diaExcede24h = diasValidos.find(
+          (d) => horasJaLancadasNoDia(srv.matricula, d.data, editingId ?? undefined) + d.horas > 24
+        );
+        if (diaExcede24h) {
+          conflitos.push(`${srv.nome} (${srv.matricula}) — ultrapassaria 24h em ${toBR(diaExcede24h.data)}`);
+          bloqueados.push(mat);
+          return;
+        }
+
+        const novo: Lancamento = {
+          id: editingId ?? crypto.randomUUID(),
+          operacao: selectedOp?.tipo ?? "ordinaria",
+          nomeOperacao: selectedOp?.label ?? "",
+          periodo,
+          servidor: srv,
+          dias: diasValidos,
+          createdAt: new Date().toISOString(),
+        };
+
+        const idx = next.findIndex((l) => l.id === novo.id);
+        if (editingId && idx >= 0) {
+          next[idx] = novo;
+          atualizados++;
+        } else {
+          next.unshift(novo);
+          criados++;
+        }
+      });
+      return next;
+    });
+
+    if (conflitos.length > 0) {
       toast({
-        title: "Limite de 24h excedido",
-        description: `${srv.nome} já ultrapassaria 24h em ${toBR(diaExcede24h.data)}. Ajuste as horas desse dia.`,
+        title: `${conflitos.length} servidor(es) não lançado(s)`,
+        description: conflitos.slice(0, 3).join(" | ") + (conflitos.length > 3 ? " ..." : ""),
         variant: "destructive",
       });
-      return;
+    }
+    if (criados + atualizados > 0) {
+      toast({ title: "Lançamento efetuado com sucesso", description: `${criados} novo(s), ${atualizados} atualizado(s)` });
     }
 
-    const novo: Lancamento = {
-      id: editingId ?? crypto.randomUUID(),
-      operacao: selectedOp?.tipo ?? "ordinaria",
-      nomeOperacao: selectedOp?.label ?? "",
-      periodo,
-      servidor: srv,
-      dias: diasValidos,
-      createdAt: new Date().toISOString(),
-    };
-
-    setLancamentos((prev) => (editingId ? prev.map((l) => (l.id === editingId ? novo : l)) : [novo, ...prev]));
     const eraEdicao = !!editingId;
     setEditingId(null);
     setDias([{ data: periodo.inicio, horas: 8, funcao: getFuncoesDisponiveisParaOperacao(selectedOp?.tipo || "ordinaria")[0] }]);
-    toast({ title: eraEdicao ? "Lançamento atualizado" : "Frequência registrada no histórico" });
+    setMatriculasSelecionadas(eraEdicao ? [] : bloqueados);
   };
 
   // Lançamento por data (vários servidores) — cada data com horas/função próprias
@@ -838,7 +869,7 @@ const Index = () => {
     }
     if (criados + atualizados > 0) {
       toast({
-        title: "Lançamento por data concluído",
+        title: "Lançamento efetuado com sucesso",
         description: `${criados} novo(s), ${atualizados} atualizado(s)`,
       });
     }
@@ -848,64 +879,25 @@ const Index = () => {
 
 
   // Consolidação
-  const [filtroOperacao, setFiltroOperacao] = useState<string>("todos");
   const [filtroHistorico, setFiltroHistorico] = useState<string>("todos");
   const [detalheId, setDetalheId] = useState<string | null>(null);
-  const historicoFiltrado = useMemo(
-    () =>
-      lancamentos
-        .filter((l) => filtroHistorico === "todos" || l.nomeOperacao === filtroHistorico)
-        .sort((a, b) => a.servidor.nome.localeCompare(b.servidor.nome)),
-    [lancamentos, filtroHistorico]
-  );
-  const consolidado = useMemo(() => {
-    const map = new Map<string, {
-      matricula: string; nome: string; cpf: string; coordenador: number; supervisor: number; agente: number; apoio: number;
-      totalHoras: number; valorHoras: number; alimentacao: number; transporte: number; totalGeral: number;
-    }>();
-
-    lancamentos.forEach((l) => {
-      if (filtroOperacao !== "todos" && l.nomeOperacao !== filtroOperacao) return;
-      const key = l.servidor.matricula;
-      if (!map.has(key)) {
-        map.set(key, {
-          matricula: key, nome: l.servidor.nome, cpf: l.servidor.cpf || "",
-          coordenador: 0, supervisor: 0, agente: 0, apoio: 0,
-          totalHoras: 0, valorHoras: 0, alimentacao: 0, transporte: 0, totalGeral: 0,
-        });
-      }
-      const row = map.get(key)!;
-      l.dias.forEach((d) => {
-        const v = valorHora(d.funcao, l.operacao);
-        if (d.funcao.includes("coordenador")) row.coordenador += d.horas;
-        else if (d.funcao.includes("supervisor")) row.supervisor += d.horas;
-        else if (d.funcao.includes("agente") || d.funcao.includes("guarda") || d.funcao.includes("fiscaliza")) row.agente += d.horas;
-        else row.apoio += d.horas;
-        row.totalHoras += d.horas;
-        row.valorHoras += d.horas * v;
-        row.alimentacao += calcAlimentacao(l.operacao, d.horas);
-      });
-      if (l.operacao === "carnaval") row.transporte += 20;
-      row.totalGeral = row.valorHoras + row.alimentacao + row.transporte;
-    });
-
-    return Array.from(map.values());
-  }, [lancamentos, filtroOperacao, valores, alimentacao]);
 
   const nomesOperacoesConsolidadas = useMemo(
     () => Array.from(new Set(lancamentos.map((l) => l.nomeOperacao))),
     [lancamentos]
   );
 
-  // Módulo de Relatórios — dados achatados por dia trabalhado
+  // Módulo de Relatórios / Gerenciar Lançamentos — dados achatados por dia trabalhado
   const diasFlat = useMemo(
     () =>
       lancamentos.flatMap((l) =>
         l.dias.map((d) => ({
+          lancamentoId: l.id,
           matricula: l.servidor.matricula,
           nome: l.servidor.nome,
           cpf: l.servidor.cpf || "",
           nomeOperacao: l.nomeOperacao,
+          operacaoTipo: l.operacao,
           data: d.data,
           ano: d.data.slice(0, 4),
           funcao: d.funcao,
@@ -935,30 +927,115 @@ const Index = () => {
           (relAno === "todos" || d.ano === relAno) &&
           (!relDataIni || d.data >= relDataIni) &&
           (!relDataFim || d.data <= relDataFim) &&
-          (relTipo === "operacoes" || relServidor === "todos" || d.matricula === relServidor)
+          (relServidor === "todos" || d.matricula === relServidor)
       ),
-    [diasFlat, relFuncao, relOperacao, relAno, relDataIni, relDataFim, relTipo, relServidor]
+    [diasFlat, relFuncao, relOperacao, relAno, relDataIni, relDataFim, relServidor]
   );
 
-  const relatorioAgrupadoOperacoes = useMemo(() => {
-    const map = new Map<string, { operacao: string; registros: number; horas: number; valor: number; alimentacao: number }>();
+  const relatorioGrupos = useMemo(() => {
+    const map = new Map<string, {
+      matricula: string; nome: string; cpf: string; nomeOperacao: string;
+      dias: { data: string; funcao: FuncaoID; horas: number; valor: number; alimentacao: number }[];
+    }>();
     relatorioFiltrado.forEach((d) => {
-      if (!map.has(d.nomeOperacao)) map.set(d.nomeOperacao, { operacao: d.nomeOperacao, registros: 0, horas: 0, valor: 0, alimentacao: 0 });
-      const row = map.get(d.nomeOperacao)!;
-      row.registros += 1; row.horas += d.horas; row.valor += d.valor; row.alimentacao += d.alimentacao;
+      const key = `${d.matricula}::${d.nomeOperacao}`;
+      if (!map.has(key)) map.set(key, { matricula: d.matricula, nome: d.nome, cpf: d.cpf, nomeOperacao: d.nomeOperacao, dias: [] });
+      map.get(key)!.dias.push({ data: d.data, funcao: d.funcao, horas: d.horas, valor: d.valor, alimentacao: d.alimentacao });
     });
-    return Array.from(map.values());
+    return Array.from(map.values())
+      .map((g) => {
+        const dias = [...g.dias].sort((a, b) => a.data.localeCompare(b.data));
+        return {
+          ...g,
+          dias,
+          diasTrabalhados: dias.length,
+          horas: dias.reduce((s, d) => s + d.horas, 0),
+          valor: dias.reduce((s, d) => s + d.valor, 0),
+          alimentacao: dias.reduce((s, d) => s + d.alimentacao, 0),
+        };
+      })
+      .sort((a, b) => a.nome.localeCompare(b.nome) || a.nomeOperacao.localeCompare(b.nomeOperacao));
   }, [relatorioFiltrado]);
 
-  const relatorioAgrupadoServidores = useMemo(() => {
-    const map = new Map<string, { matricula: string; nome: string; registros: number; horas: number; valor: number; alimentacao: number }>();
-    relatorioFiltrado.forEach((d) => {
-      if (!map.has(d.matricula)) map.set(d.matricula, { matricula: d.matricula, nome: d.nome, registros: 0, horas: 0, valor: 0, alimentacao: 0 });
-      const row = map.get(d.matricula)!;
-      row.registros += 1; row.horas += d.horas; row.valor += d.valor; row.alimentacao += d.alimentacao;
+  // Gerenciar Lançamentos — busca e seleção múltipla (1 linha por dia trabalhado)
+  const [buscaGerenciarNome, setBuscaGerenciarNome] = useState("");
+  const [buscaGerenciarData, setBuscaGerenciarData] = useState("");
+  const [buscaGerenciarDataIni, setBuscaGerenciarDataIni] = useState("");
+  const [buscaGerenciarDataFim, setBuscaGerenciarDataFim] = useState("");
+  const [linhasSelecionadas, setLinhasSelecionadas] = useState<Set<string>>(new Set());
+
+  const gerenciarLinhas = useMemo(() => {
+    const q = buscaGerenciarNome.trim().toLowerCase();
+    return diasFlat
+      .filter((d) => filtroHistorico === "todos" || d.nomeOperacao === filtroHistorico)
+      .filter((d) => !q || d.nome.toLowerCase().includes(q))
+      .filter((d) => !buscaGerenciarData || d.data === buscaGerenciarData)
+      .filter((d) => !buscaGerenciarDataIni || d.data >= buscaGerenciarDataIni)
+      .filter((d) => !buscaGerenciarDataFim || d.data <= buscaGerenciarDataFim)
+      .sort((a, b) => b.data.localeCompare(a.data) || a.nome.localeCompare(b.nome));
+  }, [diasFlat, filtroHistorico, buscaGerenciarNome, buscaGerenciarData, buscaGerenciarDataIni, buscaGerenciarDataFim]);
+
+  const linhaKey = (lancamentoId: string, data: string) => `${lancamentoId}::${data}`;
+
+  const excluirDiaLancamento = (lancamentoId: string, data: string) => {
+    setLancamentos((prev) =>
+      prev
+        .map((l) => (l.id === lancamentoId ? { ...l, dias: l.dias.filter((d) => d.data !== data) } : l))
+        .filter((l) => l.dias.length > 0)
+    );
+    setLinhasSelecionadas((prev) => {
+      const next = new Set(prev);
+      next.delete(linhaKey(lancamentoId, data));
+      return next;
     });
-    return Array.from(map.values()).sort((a, b) => a.nome.localeCompare(b.nome));
-  }, [relatorioFiltrado]);
+    toast({ title: "Lançamento excluído" });
+  };
+
+  const excluirLinhasSelecionadas = () => {
+    if (linhasSelecionadas.size === 0) return;
+    const porLancamento = new Map<string, Set<string>>();
+    linhasSelecionadas.forEach((key) => {
+      const [lid, data] = key.split("::");
+      if (!porLancamento.has(lid)) porLancamento.set(lid, new Set());
+      porLancamento.get(lid)!.add(data);
+    });
+    setLancamentos((prev) =>
+      prev
+        .map((l) => {
+          const datasRemover = porLancamento.get(l.id);
+          if (!datasRemover) return l;
+          return { ...l, dias: l.dias.filter((d) => !datasRemover.has(d.data)) };
+        })
+        .filter((l) => l.dias.length > 0)
+    );
+    toast({ title: `${linhasSelecionadas.size} lançamento(s) excluído(s)` });
+    setLinhasSelecionadas(new Set());
+  };
+
+  const toggleLinhaSelecionada = (key: string) => {
+    setLinhasSelecionadas((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const exportarGerenciarExcel = () => {
+    if (gerenciarLinhas.length === 0) {
+      toast({ title: "Nenhum lançamento para exportar", variant: "destructive" });
+      return;
+    }
+    const headers = ["Servidor", "Matrícula", "CPF", "Operação", "Data Trabalhada", "Função", "Horas", "Valor Horas", "Alimentação", "Total"];
+    const rows = gerenciarLinhas.map((d) => [
+      d.nome, d.matricula, formatarCPF(d.cpf), d.nomeOperacao, toBR(d.data), funcaoLabel(d.funcao),
+      d.horas, Number(d.valor.toFixed(2)), Number(d.alimentacao.toFixed(2)), Number((d.valor + d.alimentacao).toFixed(2)),
+    ]);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Lancamentos");
+    XLSX.writeFile(wb, "Gerenciar_Lancamentos.xlsx");
+    toast({ title: "Excel gerado" });
+  };
 
   const contatoRodape = [contatos.telefone1, contatos.telefone2].filter(Boolean).join(" • ");
 
@@ -1036,9 +1113,9 @@ const Index = () => {
     toast({ title: "Extrato gerado" });
   };
 
-  // PDF — Módulo de relatórios (Operações / Servidores) com filtros
+  // PDF — Relatório Geral (por servidor/operação), com modo detalhado opcional
   const gerarRelatorioModuloPDF = () => {
-    if (relatorioFiltrado.length === 0) {
+    if (relatorioGrupos.length === 0) {
       toast({ title: "Nenhum dado para o filtro selecionado", variant: "destructive" });
       return;
     }
@@ -1049,222 +1126,91 @@ const Index = () => {
       relFuncao === "todas" ? "" : funcaoLabel(relFuncao as FuncaoID),
     ].filter(Boolean).join(" • ");
 
-    let y = drawHeader(doc, relTipo === "operacoes" ? "Relatório de Operações Lançadas" : "Relatório Individualizado de Servidores", subtitulo);
+    let y = drawHeader(doc, "Relatório Geral de Servidores", subtitulo);
 
-    if (relTipo === "operacoes") {
-      const acc = relatorioAgrupadoOperacoes.reduce((a, r) => ({ h: a.h + r.horas, v: a.v + r.valor, al: a.al + r.alimentacao }), { h: 0, v: 0, al: 0 });
-      const rows = relatorioAgrupadoOperacoes.map((r) => [r.operacao, String(r.registros), r.horas.toFixed(2), fmtBRL(r.valor), fmtBRL(r.alimentacao), fmtBRL(r.valor + r.alimentacao)]);
+    const acc = relatorioGrupos.reduce((a, r) => ({ h: a.h + r.horas, v: a.v + r.valor, al: a.al + r.alimentacao }), { h: 0, v: 0, al: 0 });
+
+    if (!relIncluirDetalhes) {
+      const rows = relatorioGrupos.map((r) => [r.matricula, r.nome, r.nomeOperacao, String(r.diasTrabalhados), r.horas.toFixed(2), fmtBRL(r.valor), fmtBRL(r.alimentacao), fmtBRL(r.valor + r.alimentacao)]);
       autoTable(doc, {
         startY: y,
-        head: [["Operação", "Registros", "Horas", "Valor Horas", "Alimentação", "Total"]],
+        head: [["Matrícula", "Nome", "Operação", "Dias Trabalhados", "Horas", "Valor Horas", "Alimentação", "Total"]],
         body: rows,
-        foot: [["TOTAL GERAL", "", acc.h.toFixed(2), fmtBRL(acc.v), fmtBRL(acc.al), fmtBRL(acc.v + acc.al)]],
+        foot: [["", "", "TOTAL GERAL", "", acc.h.toFixed(2), fmtBRL(acc.v), fmtBRL(acc.al), fmtBRL(acc.v + acc.al)]],
         margin: { left: 14, right: 14 },
         ...(tableTheme as any),
       });
     } else {
-      const acc = relatorioAgrupadoServidores.reduce((a, r) => ({ h: a.h + r.horas, v: a.v + r.valor, al: a.al + r.alimentacao }), { h: 0, v: 0, al: 0 });
-      const rows = relatorioAgrupadoServidores.map((r) => [r.matricula, r.nome, String(r.registros), r.horas.toFixed(2), fmtBRL(r.valor), fmtBRL(r.alimentacao), fmtBRL(r.valor + r.alimentacao)]);
-      autoTable(doc, {
-        startY: y,
-        head: [["Matrícula", "Nome", "Registros", "Horas", "Valor Horas", "Alimentação", "Total"]],
-        body: rows,
-        foot: [["", "TOTAL GERAL", "", acc.h.toFixed(2), fmtBRL(acc.v), fmtBRL(acc.al), fmtBRL(acc.v + acc.al)]],
-        margin: { left: 14, right: 14 },
-        ...(tableTheme as any),
+      // Modo detalhado: para cada servidor/operação, um bloco com as datas trabalhadas individualmente
+      relatorioGrupos.forEach((g) => {
+        const espacoNecessario = 20 + g.dias.length * 7;
+        if (y + espacoNecessario > 190) {
+          doc.addPage();
+          y = 20;
+        }
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9.5);
+        doc.setTextColor(26, 45, 84);
+        doc.text(`${g.nome}  —  Matrícula ${g.matricula}  —  ${g.nomeOperacao}`, 14, y);
+        doc.setTextColor(0, 0, 0);
+        y += 4;
+
+        const rows = g.dias.map((d) => [toBR(d.data), `${d.horas}h`, funcaoLabel(d.funcao), fmtBRL(d.valor), fmtBRL(d.alimentacao), fmtBRL(d.valor + d.alimentacao)]);
+        autoTable(doc, {
+          startY: y,
+          head: [["Data Trabalhada", "Horas", "Função", "Valor Horas", "Alimentação", "Total do dia"]],
+          body: rows,
+          foot: [["", `${g.horas}h`, "", fmtBRL(g.valor), fmtBRL(g.alimentacao), fmtBRL(g.valor + g.alimentacao)]],
+          margin: { left: 14, right: 14 },
+          ...(tableTheme as any),
+          bodyStyles: { ...(tableTheme.bodyStyles as any), fontSize: 8 },
+          headStyles: { ...(tableTheme.headStyles as any), fontSize: 8 },
+          footStyles: { ...(tableTheme.footStyles as any), fontSize: 8 },
+        });
+        y = ((doc as any).lastAutoTable?.finalY ?? y) + 10;
       });
+
+      if (y > 180) { doc.addPage(); y = 20; }
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text(`TOTAL GERAL: ${acc.h.toFixed(2)}h — ${fmtBRL(acc.v + acc.al)}`, 14, y + 6);
     }
 
     drawFooters(doc, contatoRodape);
-    doc.save(`Relatorio_${relTipo}.pdf`);
+    doc.save("Relatorio_Geral_Servidores.pdf");
     toast({ title: "Relatório gerado" });
   };
 
-  // PDF — Relatório do histórico de lançamentos
-  const gerarRelatorioHistoricoPDF = () => {
-    const lista = lancamentos.filter((l) => filtroHistorico === "todos" || l.nomeOperacao === filtroHistorico);
-    if (lista.length === 0) {
-      toast({ title: "Nenhum lançamento para exportar", variant: "destructive" });
+  // Excel — Relatório Geral (por servidor/operação), com modo detalhado opcional
+  const exportarRelatorioExcel = () => {
+    if (relatorioGrupos.length === 0) {
+      toast({ title: "Nenhum dado para o filtro selecionado", variant: "destructive" });
       return;
     }
-    const doc = new jsPDF({ orientation: "landscape" });
-    let y = drawHeader(
-      doc,
-      "Relatório de Frequências Registradas",
-      filtroHistorico === "todos" ? "Todas as operações" : filtroHistorico
-    );
-
-    const ordenada = [...lista].sort((a, b) => a.servidor.nome.localeCompare(b.servidor.nome));
-    const acc = ordenada.reduce(
-      (a, l) => {
-        const t = totaisLancamento(l);
-        a.h += t.horas; a.v += t.valor; a.al += t.alim; a.tr += t.transporte; a.g += t.total;
-        return a;
-      },
-      { h: 0, v: 0, al: 0, tr: 0, g: 0 }
-    );
-
-    y = drawInfoBox(doc, y, [
-      ["Lançamentos", String(ordenada.length)],
-      ["Total de horas", acc.h.toFixed(2)],
-      ["Emissão", new Date().toLocaleDateString("pt-BR")],
-      ["Total geral", fmtBRL(acc.g)],
-    ]);
-
-    const rows = ordenada.map((l, i) => {
-      const t = totaisLancamento(l);
-      const datas = [...l.dias].sort((a, b) => a.data.localeCompare(b.data)).map((d) => toBR(d.data)).join(", ");
-      return [
-        String(i + 1),
-        l.servidor.matricula,
-        l.servidor.nome,
-        formatarCPF(l.servidor.cpf),
-        l.nomeOperacao,
-        datas,
-        t.horas.toFixed(2),
-        fmtBRL(t.valor),
-        fmtBRL(t.alim),
-        fmtBRL(t.total),
-      ];
-    });
-
-    autoTable(doc, {
-      startY: y,
-      head: [["#", "Matrícula", "Nome do servidor", "CPF", "Operação", "Datas lançadas", "Horas", "Valor Horas", "Alimentação", "Total"]],
-      body: rows,
-      foot: [["", "", "TOTAL GERAL", "", "", "", acc.h.toFixed(2), fmtBRL(acc.v), fmtBRL(acc.al), fmtBRL(acc.g)]],
-      margin: { left: 14, right: 14 },
-      columnStyles: {
-        0: { halign: "center", cellWidth: 8 },
-        1: { halign: "center" },
-        3: { halign: "center" },
-        5: { cellWidth: 70 },
-        6: { halign: "center" },
-        7: { halign: "right" }, 8: { halign: "right" }, 9: { halign: "right" },
-      },
-      ...(tableTheme as any),
-      bodyStyles: { ...(tableTheme.bodyStyles as any), fontSize: 7.5 },
-      headStyles: { ...(tableTheme.headStyles as any), fontSize: 7.5 },
-      footStyles: { ...(tableTheme.footStyles as any), fontSize: 7.5 },
-    });
-
-    const fy = ((doc as any).lastAutoTable?.finalY ?? y) + 20;
-    drawSignatures(doc, fy, [
-      { titulo: gestor.nome || "Gestor responsável", sub: gestor.cargo || "Assinatura e carimbo" },
-      { titulo: "Data: ____/____/________", sub: "Conferência" },
-    ]);
-
-    drawFooters(doc, contatoRodape);
-    doc.save("Relatorio_Frequencias_Registradas.pdf");
-    toast({ title: "Relatório gerado" });
-  };
-
-
-  // PDF — Planilha consolidada
-  const gerarPlanilhaPDF = () => {
-    if (consolidado.length === 0) {
-      toast({ title: "Nenhum dado para exportar", variant: "destructive" });
-      return;
-    }
-    const doc = new jsPDF({ orientation: "landscape" });
-    const subtitulo = filtroOperacao !== "todos" ? filtroOperacao : "Todas as operações";
-    let y = drawHeader(doc, "Planilha Consolidada de Operações Especiais", subtitulo);
-
-    const totals = consolidado.reduce(
-      (acc, r) => {
-        acc.h += r.totalHoras; acc.v += r.valorHoras; acc.a += r.alimentacao; acc.t += r.transporte; acc.g += r.totalGeral;
-        return acc;
-      },
-      { h: 0, v: 0, a: 0, t: 0, g: 0 }
-    );
-
-    y = drawInfoBox(doc, y, [
-      ["Servidores", String(consolidado.length)],
-      ["Total de horas", totals.h.toFixed(2)],
-      ["Emissão", new Date().toLocaleDateString("pt-BR")],
-      ["Total geral", fmtBRL(totals.g)],
-    ]);
-
-    const rows = [...consolidado]
-      .sort((a, b) => a.nome.localeCompare(b.nome))
-      .map((r, i) => [
-        String(i + 1),
-        r.matricula,
-        r.nome,
-        formatarCPF(r.cpf),
-        r.coordenador.toFixed(2),
-        r.supervisor.toFixed(2),
-        r.agente.toFixed(2),
-        r.apoio.toFixed(2),
-        r.totalHoras.toFixed(2),
-        fmtBRL(r.valorHoras),
-        fmtBRL(r.alimentacao),
-        r.transporte > 0 ? fmtBRL(r.transporte) : "—",
-        fmtBRL(r.totalGeral),
-      ]);
-
-    autoTable(doc, {
-      startY: y,
-      head: [["#", "Matrícula", "Nome do servidor", "CPF", "Coord. (h)", "Super. (h)", "Agente (h)", "Apoio (h)", "Total (h)", "Valor Horas", "Alimentação", "Transporte", "Total Geral"]],
-      body: rows,
-      foot: [[
-        "", "", "TOTAL GERAL", "", "", "", "", "",
-        totals.h.toFixed(2), fmtBRL(totals.v), fmtBRL(totals.a), fmtBRL(totals.t), fmtBRL(totals.g),
-      ]],
-      margin: { left: 14, right: 14 },
-      columnStyles: {
-        0: { halign: "center", cellWidth: 8 },
-        1: { halign: "center" },
-        3: { halign: "center" },
-        4: { halign: "center" }, 5: { halign: "center" }, 6: { halign: "center" }, 7: { halign: "center" }, 8: { halign: "center" },
-        9: { halign: "right" }, 10: { halign: "right" }, 11: { halign: "right" }, 12: { halign: "right" },
-      },
-      ...(tableTheme as any),
-      bodyStyles: { ...(tableTheme.bodyStyles as any), fontSize: 7.5 },
-      headStyles: { ...(tableTheme.headStyles as any), fontSize: 7.5 },
-      footStyles: { ...(tableTheme.footStyles as any), fontSize: 7.5 },
-    });
-
-    const fy = ((doc as any).lastAutoTable?.finalY ?? y) + 20;
-    drawSignatures(doc, fy, [
-      { titulo: gestor.nome || "Gestor responsável", sub: gestor.cargo || "Assinatura e carimbo" },
-      { titulo: "Data: ____/____/________", sub: "Conferência" },
-    ]);
-
-    drawFooters(doc, contatoRodape);
-    const nomeArquivo = filtroOperacao !== "todos" ? `Planilha_${filtroOperacao.replace(/\s+/g, "_")}.pdf` : "Planilha_Consolidada_Todas.pdf";
-    doc.save(nomeArquivo);
-    toast({ title: "Planilha gerada" });
-  };
-
-  const exportarPlanilhaExcel = () => {
-    if (consolidado.length === 0) {
-      toast({ title: "Nenhum dado para exportar", variant: "destructive" });
-      return;
-    }
-    const headers = ["Matrícula", "Nome", "CPF", "Coord. (h)", "Super. (h)", "Agente (h)", "Apoio (h)", "Total Horas", "Valor Horas", "Alimentação", "Transporte", "Total Geral"];
-    const rows = [...consolidado]
-      .sort((a, b) => a.nome.localeCompare(b.nome))
-      .map((r) => [
-        r.matricula, r.nome, formatarCPF(r.cpf),
-        Number(r.coordenador.toFixed(2)), Number(r.supervisor.toFixed(2)), Number(r.agente.toFixed(2)), Number(r.apoio.toFixed(2)),
-        Number(r.totalHoras.toFixed(2)), Number(r.valorHoras.toFixed(2)), Number(r.alimentacao.toFixed(2)),
-        Number(r.transporte.toFixed(2)), Number(r.totalGeral.toFixed(2)),
-      ]);
-    const totals = consolidado.reduce(
-      (acc, r) => { acc.h += r.totalHoras; acc.v += r.valorHoras; acc.a += r.alimentacao; acc.t += r.transporte; acc.g += r.totalGeral; return acc; },
-      { h: 0, v: 0, a: 0, t: 0, g: 0 }
-    );
-    const ws = XLSX.utils.aoa_to_sheet([
-      headers,
-      ...rows,
-      ["TOTAL GERAL", "", "", "", "", "", "", Number(totals.h.toFixed(2)), Number(totals.v.toFixed(2)), Number(totals.a.toFixed(2)), Number(totals.t.toFixed(2)), Number(totals.g.toFixed(2))],
-    ]);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Consolidado");
-    const nomeArquivo = filtroOperacao !== "todos" ? `Planilha_${filtroOperacao.replace(/\s+/g, "_")}.xlsx` : "Planilha_Consolidada_Todas.xlsx";
-    XLSX.writeFile(wb, nomeArquivo);
-    toast({ title: "Planilha Excel gerada" });
+
+    if (!relIncluirDetalhes) {
+      const headers = ["Matrícula", "Nome", "Operação", "Dias Trabalhados", "Horas", "Valor Horas", "Alimentação", "Total"];
+      const rows = relatorioGrupos.map((r) => [
+        r.matricula, r.nome, r.nomeOperacao, r.diasTrabalhados,
+        Number(r.horas.toFixed(2)), Number(r.valor.toFixed(2)), Number(r.alimentacao.toFixed(2)), Number((r.valor + r.alimentacao).toFixed(2)),
+      ]);
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      XLSX.utils.book_append_sheet(wb, ws, "Relatorio Geral");
+    } else {
+      const headers = ["Matrícula", "Nome", "Operação", "Data Trabalhada", "Função", "Horas", "Valor Horas", "Alimentação", "Total"];
+      const rows: (string | number)[][] = [];
+      relatorioGrupos.forEach((g) => {
+        g.dias.forEach((d) => {
+          rows.push([g.matricula, g.nome, g.nomeOperacao, toBR(d.data), funcaoLabel(d.funcao), d.horas, Number(d.valor.toFixed(2)), Number(d.alimentacao.toFixed(2)), Number((d.valor + d.alimentacao).toFixed(2))]);
+        });
+      });
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      XLSX.utils.book_append_sheet(wb, ws, "Relatorio Detalhado");
+    }
+
+    XLSX.writeFile(wb, "Relatorio_Geral_Servidores.xlsx");
+    toast({ title: "Excel gerado" });
   };
 
   const zerarLancamentos = () => {
@@ -1285,7 +1231,7 @@ const Index = () => {
     const op = buildOpcoes(y).find((o) => o.inicio === l.periodo.inicio && o.fim === l.periodo.fim && o.tipo === l.operacao);
     if (op) setOperacaoId(op.id);
     setPeriodo(l.periodo);
-    setMatriculaSelecionada(l.servidor.matricula);
+    setMatriculasSelecionadas([l.servidor.matricula]);
     setDias(l.dias);
     setTab("lancamentos");
     toast({ title: "Editando lançamento", description: `${l.servidor.nome} - ${l.nomeOperacao}` });
@@ -1407,9 +1353,8 @@ const Index = () => {
           <TabsList className="flex w-full flex-wrap h-auto items-stretch gap-1.5 p-1.5">
             <TabsTrigger value="lancamentos" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Lançar por Servidor</TabsTrigger>
             <TabsTrigger value="por-data" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Lançar por Data</TabsTrigger>
-            <TabsTrigger value="planilha" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Planilha</TabsTrigger>
+            <TabsTrigger value="logs" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Gerenciar Lançamentos</TabsTrigger>
             <TabsTrigger value="relatorios" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Relatórios</TabsTrigger>
-            <TabsTrigger value="logs" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Histórico</TabsTrigger>
             <TabsTrigger value="rh" className="flex-1 min-w-[140px] px-3 py-2 whitespace-nowrap">Configurações</TabsTrigger>
           </TabsList>
 
@@ -1480,18 +1425,8 @@ const Index = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Servidor</Label>
-                    <ServerCombobox
-                      servidores={servidores}
-                      value={matriculaSelecionada}
-                      onChange={setMatriculaSelecionada}
-                      placeholder="Buscar servidor..."
-                    />
-                    {matriculaSelecionada && (
-                      <div className="text-sm text-muted-foreground">
-                        Selecionado: {servidores.find((s) => s.matricula === matriculaSelecionada)?.nome}
-                      </div>
-                    )}
+                    <Label>Servidor(es)</Label>
+                    <MultiServerSelect servidores={servidores} selecionados={matriculasSelecionadas} onChange={setMatriculasSelecionadas} />
                   </div>
                 </CardContent>
               </Card>
@@ -1713,83 +1648,14 @@ const Index = () => {
             </div>
           </TabsContent>
 
-          {/* Planilha */}
-          <TabsContent value="planilha" className="mt-6">
-            <Card>
-              <CardHeader><CardTitle>Resumo de Horas Extras</CardTitle></CardHeader>
-              <CardContent>
-                <div className="grid md:grid-cols-3 gap-3 mb-4">
-                  <div className="space-y-2 md:col-span-1">
-                    <Label>Operação</Label>
-                    <Select value={filtroOperacao} onValueChange={setFiltroOperacao}>
-                      <SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger>
-                      <SelectContent className="z-50">
-                        <SelectItem value="todos">Todas as Operações</SelectItem>
-                        {nomesOperacoesConsolidadas.map((n) => (<SelectItem key={n} value={n}>{n}</SelectItem>))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="flex gap-2 mb-4 flex-wrap">
-                  <Button onClick={gerarPlanilhaPDF}>Exportar PDF</Button>
-                  <Button variant="secondary" onClick={exportarPlanilhaExcel}>Exportar Excel</Button>
-                  <Button variant="destructive" onClick={zerarLancamentos}>Zerar Dados</Button>
-                </div>
-
-                <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Matrícula</TableHead>
-                        <TableHead>Nome</TableHead>
-                        <TableHead>CPF</TableHead>
-                        <TableHead>Coord. (h)</TableHead>
-                        <TableHead>Super. (h)</TableHead>
-                        <TableHead>Agente (h)</TableHead>
-                        <TableHead>Apoio (h)</TableHead>
-                        <TableHead>Total Horas</TableHead>
-                        <TableHead>Valor Horas</TableHead>
-                        <TableHead>Alimentação</TableHead>
-                        <TableHead>Transporte</TableHead>
-                        <TableHead>Total Geral</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {consolidado.length === 0 && (
-                        <TableRow><TableCell colSpan={12} className="text-center text-muted-foreground">Nenhum lançamento.</TableCell></TableRow>
-                      )}
-                      {[...consolidado].sort((a, b) => a.nome.localeCompare(b.nome)).map((r) => (
-                        <TableRow key={r.matricula}>
-                          <TableCell>{r.matricula}</TableCell>
-                          <TableCell>{r.nome}</TableCell>
-                          <TableCell>{formatarCPF(r.cpf)}</TableCell>
-                          <TableCell>{r.coordenador.toFixed(2)}</TableCell>
-                          <TableCell>{r.supervisor.toFixed(2)}</TableCell>
-                          <TableCell>{r.agente.toFixed(2)}</TableCell>
-                          <TableCell>{r.apoio.toFixed(2)}</TableCell>
-                          <TableCell>{r.totalHoras.toFixed(2)}</TableCell>
-                          <TableCell>{fmtBRL(r.valorHoras)}</TableCell>
-                          <TableCell>{fmtBRL(r.alimentacao)}</TableCell>
-                          <TableCell>{r.transporte > 0 ? fmtBRL(r.transporte) : "-"}</TableCell>
-                          <TableCell>{fmtBRL(r.totalGeral)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Histórico */}
+          {/* Gerenciar Lançamentos */}
           <TabsContent value="logs" className="mt-6">
             <Card>
-              <CardHeader><CardTitle>Histórico de Frequências Registradas</CardTitle></CardHeader>
+              <CardHeader><CardTitle>Gerenciar Lançamentos</CardTitle></CardHeader>
               <CardContent>
-                <div className="grid md:grid-cols-3 gap-3 mb-4">
-                  <div className="space-y-2 md:col-span-1">
-                    <Label>Operação</Label>
+                <div className="grid md:grid-cols-5 gap-3 mb-4">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Operação</Label>
                     <Select value={filtroHistorico} onValueChange={setFiltroHistorico}>
                       <SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger>
                       <SelectContent className="z-50">
@@ -1798,72 +1664,91 @@ const Index = () => {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Nome do servidor</Label>
+                    <Input value={buscaGerenciarNome} onChange={(e) => setBuscaGerenciarNome(e.target.value)} placeholder="Buscar por nome..." />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Data trabalhada</Label>
+                    <Input type="date" value={buscaGerenciarData} onChange={(e) => setBuscaGerenciarData(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Intervalo (início)</Label>
+                    <Input type="date" value={buscaGerenciarDataIni} onChange={(e) => setBuscaGerenciarDataIni(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Intervalo (fim)</Label>
+                    <Input type="date" value={buscaGerenciarDataFim} onChange={(e) => setBuscaGerenciarDataFim(e.target.value)} />
+                  </div>
                 </div>
 
-                <div className="flex gap-2 mb-4 flex-wrap">
-                  <Button onClick={gerarRelatorioHistoricoPDF}>Exportar relatório (PDF)</Button>
+                <div className="flex gap-2 mb-4 flex-wrap items-center">
+                  <Button variant="secondary" onClick={exportarGerenciarExcel}>Exportar Excel</Button>
+                  <Button
+                    variant="destructive"
+                    disabled={linhasSelecionadas.size === 0}
+                    onClick={excluirLinhasSelecionadas}
+                  >
+                    Excluir selecionados {linhasSelecionadas.size > 0 ? `(${linhasSelecionadas.size})` : ""}
+                  </Button>
+                  {(buscaGerenciarNome || buscaGerenciarData || buscaGerenciarDataIni || buscaGerenciarDataFim || filtroHistorico !== "todos") && (
+                    <Button
+                      variant="outline"
+                      onClick={() => { setBuscaGerenciarNome(""); setBuscaGerenciarData(""); setBuscaGerenciarDataIni(""); setBuscaGerenciarDataFim(""); setFiltroHistorico("todos"); }}
+                    >
+                      Limpar filtros
+                    </Button>
+                  )}
                 </div>
 
                 <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Registro</TableHead>
+                        <TableHead className="w-10">
+                          <Checkbox
+                            checked={gerenciarLinhas.length > 0 && gerenciarLinhas.every((d) => linhasSelecionadas.has(linhaKey(d.lancamentoId, d.data)))}
+                            onCheckedChange={(checked) => {
+                              if (checked) {
+                                setLinhasSelecionadas(new Set(gerenciarLinhas.map((d) => linhaKey(d.lancamentoId, d.data))));
+                              } else {
+                                setLinhasSelecionadas(new Set());
+                              }
+                            }}
+                          />
+                        </TableHead>
                         <TableHead>Servidor</TableHead>
+                        <TableHead>Data Trabalhada</TableHead>
+                        <TableHead>Função</TableHead>
                         <TableHead>Operação</TableHead>
-                        <TableHead>Período</TableHead>
-                        <TableHead>Dias</TableHead>
                         <TableHead>Horas</TableHead>
                         <TableHead>Total</TableHead>
                         <TableHead>Ações</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {historicoFiltrado.length === 0 && (
-                        <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground">Sem frequências registradas.</TableCell></TableRow>
+                      {gerenciarLinhas.length === 0 && (
+                        <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground">Nenhum lançamento encontrado.</TableCell></TableRow>
                       )}
-                      {historicoFiltrado.map((l) => {
-                        const t = totaisLancamento(l);
-                        const aberto = detalheId === l.id;
+                      {gerenciarLinhas.map((d) => {
+                        const key = linhaKey(d.lancamentoId, d.data);
+                        const l = lancamentos.find((x) => x.id === d.lancamentoId);
                         return (
-                          <React.Fragment key={l.id}>
-                            <TableRow key={l.id}>
-                              <TableCell>{new Date(l.createdAt).toLocaleDateString("pt-BR")}</TableCell>
-                              <TableCell>{l.servidor.nome} ({l.servidor.matricula})</TableCell>
-                              <TableCell>{l.nomeOperacao}</TableCell>
-                              <TableCell>{toBR(l.periodo.inicio)} a {toBR(l.periodo.fim)}</TableCell>
-                              <TableCell>{l.dias.length}</TableCell>
-                              <TableCell>{t.horas.toFixed(2)}</TableCell>
-                              <TableCell>{fmtBRL(t.total)}</TableCell>
-                              <TableCell className="flex gap-2 flex-wrap">
-                                <Button size="sm" variant="secondary" onClick={() => setDetalheId(aberto ? null : l.id)}>
-                                  {aberto ? "Ocultar" : "Visualizar"}
-                                </Button>
-                                <Button size="sm" onClick={() => editarLancamento(l)}>Editar</Button>
-                                <Button size="sm" variant="secondary" onClick={() => gerarExtratoLancamentoPDF(l)}>PDF</Button>
-                                <Button size="sm" variant="destructive" onClick={() => excluirLancamento(l.id)}>Excluir</Button>
-                              </TableCell>
-                            </TableRow>
-                            {aberto && (
-                              <TableRow key={`${l.id}-det`}>
-                                <TableCell colSpan={8} className="bg-muted/40">
-                                  <div className="space-y-1 text-sm">
-                                    {[...l.dias].sort((a, b) => a.data.localeCompare(b.data)).map((d, i) => (
-                                      <div key={i} className="flex flex-wrap gap-x-6">
-                                        <span className="font-medium">{toBR(d.data)}</span>
-                                        <span>{d.horas}h</span>
-                                        <span>{funcaoLabel(d.funcao)}</span>
-                                        <span>Valor horas: {fmtBRL(d.horas * valorHora(d.funcao, l.operacao))}</span>
-                                        <span>Alimentação: {fmtBRL(calcAlimentacao(l.operacao, d.horas))}</span>
-                                      </div>
-                                    ))}
-                                    {l.operacao === "carnaval" && <div>Auxílio transporte: {fmtBRL(t.transporte)}</div>}
-                                    <div className="font-medium pt-1">Total do lançamento: {fmtBRL(t.total)}</div>
-                                  </div>
-                                </TableCell>
-                              </TableRow>
-                            )}
-                          </React.Fragment>
+                          <TableRow key={key}>
+                            <TableCell>
+                              <Checkbox checked={linhasSelecionadas.has(key)} onCheckedChange={() => toggleLinhaSelecionada(key)} />
+                            </TableCell>
+                            <TableCell>{d.nome} ({d.matricula})</TableCell>
+                            <TableCell>{toBR(d.data)}</TableCell>
+                            <TableCell>{funcaoLabel(d.funcao)}</TableCell>
+                            <TableCell>{d.nomeOperacao}</TableCell>
+                            <TableCell>{d.horas}h</TableCell>
+                            <TableCell>{fmtBRL(d.valor + d.alimentacao)}</TableCell>
+                            <TableCell className="flex gap-2 flex-wrap">
+                              {l && <Button size="sm" onClick={() => editarLancamento(l)}>Editar</Button>}
+                              <Button size="sm" variant="destructive" onClick={() => excluirDiaLancamento(d.lancamentoId, d.data)}>Excluir</Button>
+                            </TableCell>
+                          </TableRow>
                         );
                       })}
                     </TableBody>
@@ -1876,28 +1761,21 @@ const Index = () => {
           {/* Relatórios de Operações e Servidores */}
           <TabsContent value="relatorios" className="mt-6">
             <Card>
-              <CardHeader><CardTitle>Relatórios</CardTitle></CardHeader>
+              <CardHeader><CardTitle>Relatório Geral</CardTitle></CardHeader>
               <CardContent>
-                <div className="flex gap-2 mb-4">
-                  <Button variant={relTipo === "operacoes" ? "default" : "outline"} onClick={() => setRelTipo("operacoes")}>Operações Lançadas</Button>
-                  <Button variant={relTipo === "servidores" ? "default" : "outline"} onClick={() => setRelTipo("servidores")}>Individualizado de Servidores</Button>
-                </div>
-
                 <div className="grid md:grid-cols-5 gap-3 mb-4">
-                  {relTipo === "servidores" && (
-                    <div className="space-y-1">
-                      <Label className="text-xs">Servidor</Label>
-                      <Select value={relServidor} onValueChange={setRelServidor}>
-                        <SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger>
-                        <SelectContent className="z-50">
-                          <SelectItem value="todos">Todos os servidores</SelectItem>
-                          {[...servidores].sort((a, b) => a.nome.localeCompare(b.nome)).map((s) => (
-                            <SelectItem key={s.matricula} value={s.matricula}>{s.nome}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
+                  <div className="space-y-1">
+                    <Label className="text-xs">Servidor</Label>
+                    <Select value={relServidor} onValueChange={setRelServidor}>
+                      <SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger>
+                      <SelectContent className="z-50">
+                        <SelectItem value="todos">Todos os servidores</SelectItem>
+                        {[...servidores].sort((a, b) => a.nome.localeCompare(b.nome)).map((s) => (
+                          <SelectItem key={s.matricula} value={s.matricula}>{s.nome}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="space-y-1">
                     <Label className="text-xs">Função</Label>
                     <Select value={relFuncao} onValueChange={setRelFuncao}>
@@ -1928,89 +1806,66 @@ const Index = () => {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Período (início)</Label>
-                    <Input type="date" value={relDataIni} onChange={(e) => setRelDataIni(e.target.value)} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Período (fim)</Label>
-                    <Input type="date" value={relDataFim} onChange={(e) => setRelDataFim(e.target.value)} />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Data trabalhada (início)</Label>
+                      <Input type="date" value={relDataIni} onChange={(e) => setRelDataIni(e.target.value)} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Data trabalhada (fim)</Label>
+                      <Input type="date" value={relDataFim} onChange={(e) => setRelDataFim(e.target.value)} />
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex gap-2 mb-4 flex-wrap">
+                <div className="flex gap-3 mb-4 flex-wrap items-center">
                   <Button onClick={gerarRelatorioModuloPDF}>Exportar PDF</Button>
+                  <Button variant="secondary" onClick={exportarRelatorioExcel}>Exportar Excel</Button>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <Checkbox checked={relIncluirDetalhes} onCheckedChange={(v) => setRelIncluirDetalhes(!!v)} />
+                    Incluir datas trabalhadas detalhadas por servidor
+                  </label>
                   <Button
-                    variant="secondary"
+                    variant="outline"
                     onClick={() => { setRelFuncao("todas"); setRelOperacao("todas"); setRelAno("todos"); setRelDataIni(""); setRelDataFim(""); setRelServidor("todos"); }}
                   >
                     Limpar filtros (Geral)
                   </Button>
                 </div>
 
-                {relTipo === "operacoes" ? (
-                  <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Operação</TableHead>
-                          <TableHead>Registros</TableHead>
-                          <TableHead>Horas</TableHead>
-                          <TableHead>Valor Horas</TableHead>
-                          <TableHead>Alimentação</TableHead>
-                          <TableHead>Total</TableHead>
+                <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Matrícula</TableHead>
+                        <TableHead>Nome</TableHead>
+                        <TableHead>Operação</TableHead>
+                        <TableHead>Dias Trabalhados</TableHead>
+                        <TableHead>Horas</TableHead>
+                        <TableHead>Valor Horas</TableHead>
+                        <TableHead>Alimentação</TableHead>
+                        <TableHead>Total</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {relatorioGrupos.length === 0 && (
+                        <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground">Nenhum dado para o filtro selecionado.</TableCell></TableRow>
+                      )}
+                      {relatorioGrupos.map((r) => (
+                        <TableRow key={`${r.matricula}::${r.nomeOperacao}`}>
+                          <TableCell>{r.matricula}</TableCell>
+                          <TableCell>{r.nome}</TableCell>
+                          <TableCell>{r.nomeOperacao}</TableCell>
+                          <TableCell>{r.diasTrabalhados}</TableCell>
+                          <TableCell>{r.horas.toFixed(2)}</TableCell>
+                          <TableCell>{fmtBRL(r.valor)}</TableCell>
+                          <TableCell>{fmtBRL(r.alimentacao)}</TableCell>
+                          <TableCell>{fmtBRL(r.valor + r.alimentacao)}</TableCell>
                         </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {relatorioAgrupadoOperacoes.length === 0 && (
-                          <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">Nenhum dado para o filtro selecionado.</TableCell></TableRow>
-                        )}
-                        {relatorioAgrupadoOperacoes.map((r) => (
-                          <TableRow key={r.operacao}>
-                            <TableCell>{r.operacao}</TableCell>
-                            <TableCell>{r.registros}</TableCell>
-                            <TableCell>{r.horas.toFixed(2)}</TableCell>
-                            <TableCell>{fmtBRL(r.valor)}</TableCell>
-                            <TableCell>{fmtBRL(r.alimentacao)}</TableCell>
-                            <TableCell>{fmtBRL(r.valor + r.alimentacao)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                ) : (
-                  <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Matrícula</TableHead>
-                          <TableHead>Nome</TableHead>
-                          <TableHead>Registros</TableHead>
-                          <TableHead>Horas</TableHead>
-                          <TableHead>Valor Horas</TableHead>
-                          <TableHead>Alimentação</TableHead>
-                          <TableHead>Total</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {relatorioAgrupadoServidores.length === 0 && (
-                          <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground">Nenhum dado para o filtro selecionado.</TableCell></TableRow>
-                        )}
-                        {relatorioAgrupadoServidores.map((r) => (
-                          <TableRow key={r.matricula}>
-                            <TableCell>{r.matricula}</TableCell>
-                            <TableCell>{r.nome}</TableCell>
-                            <TableCell>{r.registros}</TableCell>
-                            <TableCell>{r.horas.toFixed(2)}</TableCell>
-                            <TableCell>{fmtBRL(r.valor)}</TableCell>
-                            <TableCell>{fmtBRL(r.alimentacao)}</TableCell>
-                            <TableCell>{fmtBRL(r.valor + r.alimentacao)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -2276,6 +2131,16 @@ const Index = () => {
                       </TableBody>
                     </Table>
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card className="md:col-span-2 border-destructive/40">
+                <CardHeader><CardTitle className="text-destructive">Zona de Perigo</CardTitle></CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    Remove todos os lançamentos de horas do sistema. O cadastro de servidores é preservado. Essa ação não pode ser desfeita.
+                  </p>
+                  <Button variant="destructive" onClick={zerarLancamentos}>Zerar Dados (todos os lançamentos)</Button>
                 </CardContent>
               </Card>
 
