@@ -401,6 +401,32 @@ const Index = () => {
     return (alimentacao as any).carnaval?.[horas] || 0;
   };
 
+  const resumoLoteDias = useMemo(() => {
+    const tipo = selectedOp?.tipo ?? "ordinaria";
+    return loteDias.reduce(
+      (acc, d) => {
+        const vh = d.horas * valorHora(d.funcao, tipo);
+        const al = calcAlimentacao(tipo, d.horas);
+        return { horas: acc.horas + d.horas, valorHoras: acc.valorHoras + vh, alimentacao: acc.alimentacao + al, total: acc.total + vh + al };
+      },
+      { horas: 0, valorHoras: 0, alimentacao: 0, total: 0 }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loteDias, selectedOp, valores, alimentacao]);
+
+  const resumoDias = useMemo(() => {
+    const tipo = selectedOp?.tipo ?? "ordinaria";
+    return dias.reduce(
+      (acc, d) => {
+        const vh = d.horas * valorHora(d.funcao, tipo);
+        const al = calcAlimentacao(tipo, d.horas);
+        return { horas: acc.horas + d.horas, valorHoras: acc.valorHoras + vh, alimentacao: acc.alimentacao + al, total: acc.total + vh + al };
+      },
+      { horas: 0, valorHoras: 0, alimentacao: 0, total: 0 }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dias, selectedOp, valores, alimentacao]);
+
   const funcaoLabel = (f: FuncaoID) => {
     const labels: Record<FuncaoID, string> = {
       coordenador_geral: "Coordenador Geral",
@@ -1366,30 +1392,6 @@ const Index = () => {
   }
 
   const funcoesDaOperacao = getFuncoesDisponiveisParaOperacao(selectedOp?.tipo || "ordinaria");
-
-  const resumoLoteDias = useMemo(() => {
-    const tipo = selectedOp?.tipo ?? "ordinaria";
-    return loteDias.reduce(
-      (acc, d) => {
-        const vh = d.horas * valorHora(d.funcao, tipo);
-        const al = calcAlimentacao(tipo, d.horas);
-        return { horas: acc.horas + d.horas, valorHoras: acc.valorHoras + vh, alimentacao: acc.alimentacao + al, total: acc.total + vh + al };
-      },
-      { horas: 0, valorHoras: 0, alimentacao: 0, total: 0 }
-    );
-  }, [loteDias, selectedOp, valores, alimentacao]);
-
-  const resumoDias = useMemo(() => {
-    const tipo = selectedOp?.tipo ?? "ordinaria";
-    return dias.reduce(
-      (acc, d) => {
-        const vh = d.horas * valorHora(d.funcao, tipo);
-        const al = calcAlimentacao(tipo, d.horas);
-        return { horas: acc.horas + d.horas, valorHoras: acc.valorHoras + vh, alimentacao: acc.alimentacao + al, total: acc.total + vh + al };
-      },
-      { horas: 0, valorHoras: 0, alimentacao: 0, total: 0 }
-    );
-  }, [dias, selectedOp, valores, alimentacao]);
 
   return (
     <div className="min-h-screen">
