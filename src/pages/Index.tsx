@@ -226,7 +226,7 @@ const Index = () => {
   const [dias, setDias] = useState<DiaTrabalho[]>([{ data: initialOps[0]?.inicio ?? "", horas: 8, funcao: "coordenador" }]);
 
   // Lançamento por data (lote)
-  const [loteDatas, setLoteDatas] = useState<string[]>([]);
+  const [loteDias, setLoteDias] = useState<DiaTrabalho[]>([]);
   const [loteNovaData, setLoteNovaData] = useState<string>("");
   const [loteHoras, setLoteHoras] = useState<number>(8);
   const [loteFuncao, setLoteFuncao] = useState<FuncaoID>("agente_fiscalizacao");
@@ -709,33 +709,34 @@ const Index = () => {
     toast({ title: eraEdicao ? "Lançamento atualizado" : "Frequência registrada no histórico" });
   };
 
-  // Lançamento por data (vários servidores)
+  // Lançamento por data (vários servidores) — cada data com horas/função próprias
   const adicionarLoteData = () => {
     if (!loteNovaData) return;
     if (loteNovaData < periodo.inicio || loteNovaData > periodo.fim) {
       toast({ title: "Data fora do período da operação", variant: "destructive" });
       return;
     }
-    if (loteDatas.includes(loteNovaData)) {
+    if (loteDias.some((d) => d.data === loteNovaData)) {
       toast({ title: "Data já adicionada", variant: "destructive" });
       return;
     }
-    setLoteDatas((d) => [...d, loteNovaData].sort());
+    setLoteDias((d) => [...d, { data: loteNovaData, horas: loteHoras, funcao: loteFuncao }].sort((a, b) => a.data.localeCompare(b.data)));
     setLoteNovaData("");
   };
 
+  const atualizarLoteDia = (index: number, patch: Partial<DiaTrabalho>) =>
+    setLoteDias((prev) => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)));
+
+  const removerLoteDia = (index: number) => setLoteDias((prev) => prev.filter((_, i) => i !== index));
+
   const salvarLancamentoPorData = () => {
     setLoteConflitos([]);
-    if (loteDatas.length === 0) {
+    if (loteDias.length === 0) {
       toast({ title: "Adicione pelo menos uma data", variant: "destructive" });
       return;
     }
     if (loteMatriculas.length === 0) {
       toast({ title: "Selecione pelo menos um servidor", variant: "destructive" });
-      return;
-    }
-    if (!loteHoras || loteHoras <= 0) {
-      toast({ title: "Informe a carga horária", variant: "destructive" });
       return;
     }
 
@@ -755,7 +756,7 @@ const Index = () => {
         const datasExistentes = new Set(
           next.filter((l) => l.servidor.matricula === mat).flatMap((l) => l.dias.map((d) => d.data))
         );
-        const datasConflitantes = loteDatas.filter((data) => datasExistentes.has(data));
+        const datasConflitantes = loteDias.filter((d) => datasExistentes.has(d.data)).map((d) => d.data);
         if (datasConflitantes.length > 0) {
           // Servidor com data(s) já lançada(s): NÃO é lançado e o erro é apontado.
           conflitos.push(
@@ -765,7 +766,7 @@ const Index = () => {
           return;
         }
 
-        const datasExcedendo24h = loteDatas.filter((data) => horasJaLancadasNoDia(mat, data) + loteHoras > 24);
+        const datasExcedendo24h = loteDias.filter((d) => horasJaLancadasNoDia(mat, d.data) + d.horas > 24).map((d) => d.data);
         if (datasExcedendo24h.length > 0) {
           conflitos.push(
             `${srv.nome} (${srv.matricula}) — ultrapassaria 24h em ${datasExcedendo24h.map(toBR).join(", ")}`
@@ -774,7 +775,7 @@ const Index = () => {
           return;
         }
 
-        const novosDias: DiaTrabalho[] = loteDatas.map((data) => ({ data, horas: loteHoras, funcao: loteFuncao }));
+        const novosDias: DiaTrabalho[] = loteDias.map((d) => ({ data: d.data, horas: d.horas, funcao: d.funcao }));
         const existenteIdx = next.findIndex(
           (l) => l.servidor.matricula === mat && l.nomeOperacao === nomeOperacao && l.periodo.inicio === periodo.inicio && l.periodo.fim === periodo.fim
         );
@@ -1366,6 +1367,30 @@ const Index = () => {
 
   const funcoesDaOperacao = getFuncoesDisponiveisParaOperacao(selectedOp?.tipo || "ordinaria");
 
+  const resumoLoteDias = useMemo(() => {
+    const tipo = selectedOp?.tipo ?? "ordinaria";
+    return loteDias.reduce(
+      (acc, d) => {
+        const vh = d.horas * valorHora(d.funcao, tipo);
+        const al = calcAlimentacao(tipo, d.horas);
+        return { horas: acc.horas + d.horas, valorHoras: acc.valorHoras + vh, alimentacao: acc.alimentacao + al, total: acc.total + vh + al };
+      },
+      { horas: 0, valorHoras: 0, alimentacao: 0, total: 0 }
+    );
+  }, [loteDias, selectedOp, valores, alimentacao]);
+
+  const resumoDias = useMemo(() => {
+    const tipo = selectedOp?.tipo ?? "ordinaria";
+    return dias.reduce(
+      (acc, d) => {
+        const vh = d.horas * valorHora(d.funcao, tipo);
+        const al = calcAlimentacao(tipo, d.horas);
+        return { horas: acc.horas + d.horas, valorHoras: acc.valorHoras + vh, alimentacao: acc.alimentacao + al, total: acc.total + vh + al };
+      },
+      { horas: 0, valorHoras: 0, alimentacao: 0, total: 0 }
+    );
+  }, [dias, selectedOp, valores, alimentacao]);
+
   return (
     <div className="min-h-screen">
       <Header
@@ -1472,8 +1497,13 @@ const Index = () => {
               <Card className="md:col-span-2">
                 <CardHeader><CardTitle>Lançamento de Horas</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
-                  {dias.map((d, i) => (
-                    <div key={i} className="flex items-center gap-2 border rounded-md p-3 flex-wrap">
+                  {dias.map((d, i) => {
+                    const tipoAtual = selectedOp?.tipo ?? "ordinaria";
+                    const valorDiaHoras = d.horas * valorHora(d.funcao, tipoAtual);
+                    const alimentacaoDia = calcAlimentacao(tipoAtual, d.horas);
+                    return (
+                    <div key={i} className="border rounded-md p-3 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <Input
                         type="date"
                         value={d.data}
@@ -1512,7 +1542,21 @@ const Index = () => {
                         <Button variant="destructive" onClick={() => removerDia(i)}>Remover</Button>
                       </div>
                     </div>
-                  ))}
+                    <div className="text-xs text-muted-foreground pl-1">
+                      {d.horas}h — {funcaoLabel(d.funcao)}: {fmtBRL(valorDiaHoras)} (horas) + {fmtBRL(alimentacaoDia)} (alimentação) = <span className="font-medium text-foreground">{fmtBRL(valorDiaHoras + alimentacaoDia)}</span> (total do dia)
+                    </div>
+                    </div>
+                    );
+                  })}
+
+                  {dias.length > 0 && (
+                    <div className="rounded-md border bg-muted/40 p-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                      <div><span className="text-muted-foreground">Total horas: </span><span className="font-medium">{resumoDias.horas}h</span></div>
+                      <div><span className="text-muted-foreground">Valor horas: </span><span className="font-medium">{fmtBRL(resumoDias.valorHoras)}</span></div>
+                      <div><span className="text-muted-foreground">Alimentação: </span><span className="font-medium">{fmtBRL(resumoDias.alimentacao)}</span></div>
+                      <div><span className="text-muted-foreground">Total geral: </span><span className="font-semibold">{fmtBRL(resumoDias.total)}</span></div>
+                    </div>
+                  )}
 
                   <div className="flex gap-2 flex-wrap">
                     <Button onClick={adicionarDia}>+ Adicionar dia</Button>
@@ -1566,18 +1610,11 @@ const Index = () => {
                       <Input type="date" value={loteNovaData} min={periodo.inicio} max={periodo.fim} onChange={(e) => setLoteNovaData(e.target.value)} />
                       <Button onClick={adicionarLoteData}>+</Button>
                     </div>
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      {loteDatas.length === 0 && <span className="text-xs text-muted-foreground">Nenhuma data adicionada.</span>}
-                      {loteDatas.map((d) => (
-                        <Badge key={d} variant="secondary" className="cursor-pointer" onClick={() => setLoteDatas((prev) => prev.filter((x) => x !== d))}>
-                          {toBR(d)} ✕
-                        </Badge>
-                      ))}
-                    </div>
+                    <div className="text-xs text-muted-foreground">A carga horária e função abaixo são usadas como padrão para cada nova data — depois de adicionada, cada dia pode ser ajustado individualmente na lista ao lado.</div>
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Carga horária por dia</Label>
+                    <Label>Carga horária padrão</Label>
                     <Input
                       type="number"
                       min={1}
@@ -1591,7 +1628,7 @@ const Index = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Função na operação</Label>
+                    <Label>Função padrão</Label>
                     <Select value={loteFuncao} onValueChange={(v: FuncaoID) => setLoteFuncao(v)}>
                       <SelectTrigger><SelectValue placeholder="Função" /></SelectTrigger>
                       <SelectContent className="z-50">
@@ -1600,6 +1637,53 @@ const Index = () => {
                     </Select>
                     <div className="text-xs text-muted-foreground">Valor/h: {fmtBRL(valorHora(loteFuncao, selectedOp?.tipo ?? "ordinaria"))}</div>
                   </div>
+
+                  <div className="space-y-2">
+                    <Label>Dias adicionados a este lançamento</Label>
+                    {loteDias.length === 0 && <div className="text-xs text-muted-foreground">Nenhuma data adicionada.</div>}
+                    {loteDias.map((d, i) => {
+                      const tipoAtual = selectedOp?.tipo ?? "ordinaria";
+                      const valorDiaHoras = d.horas * valorHora(d.funcao, tipoAtual);
+                      const alimentacaoDia = calcAlimentacao(tipoAtual, d.horas);
+                      return (
+                        <div key={d.data} className="border rounded-md p-3 space-y-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <div className="text-sm font-medium min-w-[90px]">{toBR(d.data)}</div>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={selectedOp?.tipo === "carnaval" ? 24 : 12}
+                              value={d.horas}
+                              onChange={(e) => {
+                                const limit = selectedOp?.tipo === "carnaval" ? 24 : 12;
+                                atualizarLoteDia(i, { horas: Math.max(1, Math.min(Number(e.target.value || 0), limit)) });
+                              }}
+                              className="w-20"
+                            />
+                            <Select value={d.funcao} onValueChange={(v: FuncaoID) => atualizarLoteDia(i, { funcao: v })}>
+                              <SelectTrigger className="w-48"><SelectValue placeholder="Função" /></SelectTrigger>
+                              <SelectContent className="z-50">
+                                {funcoesDaOperacao.map((funcao) => (<SelectItem key={funcao} value={funcao}>{funcaoLabel(funcao)}</SelectItem>))}
+                              </SelectContent>
+                            </Select>
+                            <Button variant="destructive" size="sm" className="ms-auto" onClick={() => removerLoteDia(i)}>Remover</Button>
+                          </div>
+                          <div className="text-xs text-muted-foreground pl-1">
+                            {d.horas}h — {funcaoLabel(d.funcao)}: {fmtBRL(valorDiaHoras)} (horas) + {fmtBRL(alimentacaoDia)} (alimentação) = <span className="font-medium text-foreground">{fmtBRL(valorDiaHoras + alimentacaoDia)}</span> (total do dia)
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {loteDias.length > 0 && (
+                    <div className="rounded-md border bg-muted/40 p-3 grid grid-cols-2 gap-2 text-sm">
+                      <div><span className="text-muted-foreground">Total horas: </span><span className="font-medium">{resumoLoteDias.horas}h</span></div>
+                      <div><span className="text-muted-foreground">Valor horas: </span><span className="font-medium">{fmtBRL(resumoLoteDias.valorHoras)}</span></div>
+                      <div><span className="text-muted-foreground">Alimentação: </span><span className="font-medium">{fmtBRL(resumoLoteDias.alimentacao)}</span></div>
+                      <div><span className="text-muted-foreground">Total geral (por servidor): </span><span className="font-semibold">{fmtBRL(resumoLoteDias.total)}</span></div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -1618,7 +1702,7 @@ const Index = () => {
                     </div>
                   )}
                   <div className="text-xs text-muted-foreground">
-                    Serão criados {loteDatas.length} dia(s) de {loteHoras}h para cada servidor selecionado. Servidores que já possuam lançamento em qualquer uma das datas não são lançados e o sistema aponta o erro.
+                    Serão criados {loteDias.length} dia(s), nas horas/função definidas em cada linha, para cada servidor selecionado. Servidores que já possuam lançamento em qualquer uma das datas (ou que ultrapassem 24h/dia) não são lançados e o sistema aponta o erro.
                   </div>
 
                   <Button onClick={salvarLancamentoPorData}>Lançar para os servidores selecionados</Button>
