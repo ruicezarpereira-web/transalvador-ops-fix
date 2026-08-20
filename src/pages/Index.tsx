@@ -231,6 +231,9 @@ const Index = () => {
   const [gestor, setGestor] = useState<{ nome: string; cargo: string }>(() =>
     load("gestorSetor", { nome: "", cargo: "Gestor da Operação" })
   );
+  const [chefeSetor, setChefeSetor] = useState<{ nome: string; cargo: string }>(() =>
+    load("chefeSetor", { nome: "", cargo: "Chefe do Setor" })
+  );
   const [valores, setValores] = useState(() => loadComPadroes("valoresOperacoes", valoresDefault));
   const [alimentacao, setAlimentacao] = useState(() => loadComPadroes("alimentacaoOperacoes", alimentacaoDefault));
 
@@ -515,6 +518,7 @@ const Index = () => {
   useEffect(() => save("senhaMaster", senhaMaster), [senhaMaster]);
   useEffect(() => save("contatosSetor", contatos), [contatos]);
   useEffect(() => save("gestorSetor", gestor), [gestor]);
+  useEffect(() => save("chefeSetor", chefeSetor), [chefeSetor]);
   useEffect(() => save("valoresOperacoes", valores), [valores]);
   useEffect(() => save("alimentacaoOperacoes", alimentacao), [alimentacao]);
   useEffect(() => save("sistemaDesbloqueado", sistemaDesbloqueado), [sistemaDesbloqueado]);
@@ -687,6 +691,7 @@ const Index = () => {
     save("alimentacaoOperacoes", alimentacao);
     save("contatosSetor", contatos);
     save("gestorSetor", gestor);
+    save("chefeSetor", chefeSetor);
     toast({ title: "Alterações salvas com sucesso" });
   };
 
@@ -1205,6 +1210,7 @@ const Index = () => {
     drawSignatures(doc, fy, [
       { titulo: l.servidor.nome, sub: `Matrícula ${l.servidor.matricula} — Servidor` },
       { titulo: gestor.nome || "Gestor responsável", sub: gestor.cargo || "Assinatura e carimbo" },
+      { titulo: chefeSetor.nome || "Chefe do Setor", sub: chefeSetor.cargo || "Assinatura e carimbo" },
     ]);
 
     drawFooters(doc, contatoRodape);
@@ -2136,6 +2142,14 @@ const Index = () => {
                   <div className="space-y-1">
                     <Label>Cargo do gestor</Label>
                     <Input value={gestor.cargo} onChange={(e) => setGestor((g) => ({ ...g, cargo: e.target.value }))} placeholder="Ex.: Gerente de Operações Especiais" />
+                  </div>
+                  <div className="space-y-1 border-t pt-3">
+                    <Label>Nome do chefe do setor (assinatura)</Label>
+                    <Input value={chefeSetor.nome} onChange={(e) => setChefeSetor((c) => ({ ...c, nome: e.target.value }))} placeholder="Nome completo do chefe do setor" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Cargo do chefe do setor</Label>
+                    <Input value={chefeSetor.cargo} onChange={(e) => setChefeSetor((c) => ({ ...c, cargo: e.target.value }))} placeholder="Ex.: Chefe do Setor de Trânsito" />
                   </div>
                   <div className="grid md:grid-cols-2 gap-2">
                     <div className="space-y-1">
