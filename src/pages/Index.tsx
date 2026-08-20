@@ -1247,6 +1247,7 @@ const Index = () => {
         margin: { left: 14, right: 14 },
         ...(tableTheme as any),
       });
+      y = ((doc as any).lastAutoTable?.finalY ?? y) + 20;
     } else {
       // Modo detalhado: para cada servidor/operação, um bloco com as datas trabalhadas individualmente
       relatorioGruposOrdenado.forEach((g) => {
@@ -1281,7 +1282,13 @@ const Index = () => {
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
       doc.text(`TOTAL GERAL: ${acc.h.toFixed(2)}h — ${fmtBRL(acc.v + acc.al)}`, 14, y + 6);
+      y += 26;
     }
+
+    drawSignatures(doc, y, [
+      { titulo: gestor.nome || "Gestor responsável", sub: gestor.cargo || "Assinatura e carimbo" },
+      { titulo: chefeSetor.nome || "Chefe do Setor", sub: chefeSetor.cargo || "Assinatura e carimbo" },
+    ]);
 
     drawFooters(doc, contatoRodape);
     doc.save("Relatorio_Geral_Servidores.pdf");
