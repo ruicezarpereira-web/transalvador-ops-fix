@@ -147,6 +147,18 @@ const load = <T,>(key: string, fallback: T): T => {
 };
 const save = (key: string, value: unknown) => localStorage.setItem(key, JSON.stringify(value));
 
+// Mescla dados salvos com os padrões, garantindo que tipos/chaves adicionados
+// em atualizações do sistema (ex.: "extraordinaria") sempre existam, mesmo
+// para quem já tinha dados salvos de uma versão anterior.
+const loadComPadroes = <T extends Record<string, any>>(key: string, defaults: T): T => {
+  const salvo = load<Partial<T>>(key, {});
+  const resultado = { ...defaults } as T;
+  for (const tipo of Object.keys(defaults)) {
+    resultado[tipo as keyof T] = { ...defaults[tipo], ...(salvo?.[tipo] || {}) } as T[keyof T];
+  }
+  return resultado;
+};
+
 // Acesso único (usuário único + senha master)
 const USUARIO_MASTER = "RCPPJ";
 const SENHA_MASTER_PADRAO = "Segep@Transalvador2026";
@@ -219,8 +231,8 @@ const Index = () => {
   const [gestor, setGestor] = useState<{ nome: string; cargo: string }>(() =>
     load("gestorSetor", { nome: "", cargo: "Gestor da Operação" })
   );
-  const [valores, setValores] = useState(() => load("valoresOperacoes", valoresDefault));
-  const [alimentacao, setAlimentacao] = useState(() => load("alimentacaoOperacoes", alimentacaoDefault));
+  const [valores, setValores] = useState(() => loadComPadroes("valoresOperacoes", valoresDefault));
+  const [alimentacao, setAlimentacao] = useState(() => loadComPadroes("alimentacaoOperacoes", alimentacaoDefault));
 
   // Login
   const [loginUsuario, setLoginUsuario] = useState<string>(USUARIO_MASTER);
@@ -2147,7 +2159,7 @@ const Index = () => {
                       <div key={tipo}>
                         <h4 className="font-medium mb-3 capitalize">Operação {tipo}</h4>
                         <div className="grid grid-cols-2 gap-2">
-                          {Object.entries((valores as any)[tipo]).map(([funcao, valor]) => (
+                          {Object.entries((valores as any)[tipo] || {}).map(([funcao, valor]) => (
                             <div key={funcao} className="space-y-1">
                               <Label className="text-xs">{funcaoLabel(funcao as FuncaoID)}</Label>
                               <Input
