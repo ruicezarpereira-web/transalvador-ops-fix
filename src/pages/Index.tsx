@@ -25,10 +25,13 @@ type FuncaoID =
 
 type DiaTrabalho = { data: string; horas: number; funcao: FuncaoID };
 
-type OperacaoTipo = "ordinaria" | "reveillon" | "carnaval";
+type OperacaoTipo = "ordinaria" | "reveillon" | "carnaval" | "extraordinaria";
+
+type Operacao = { id: string; nome: string; tipo: OperacaoTipo; periodo: { inicio: string; fim: string } };
 
 type Lancamento = {
   id: string;
+  operacaoId?: string;
   operacao: OperacaoTipo;
   nomeOperacao: string;
   periodo: { inicio: string; fim: string };
@@ -49,6 +52,12 @@ type SystemUser = {
 
 const valoresDefault = {
   ordinaria: {
+    coordenador: 20.5,
+    supervisor: 15.5,
+    agente_fiscalizacao: 12.0,
+    apoio_adm: 10.0,
+  } as ValoresOperacao,
+  extraordinaria: {
     coordenador: 20.5,
     supervisor: 15.5,
     agente_fiscalizacao: 12.0,
@@ -75,6 +84,7 @@ const valoresDefault = {
 
 const alimentacaoDefault = {
   ordinaria: { proporcional: true, valorHora: 2.0, minimoHoras: 8 },
+  extraordinaria: { proporcional: true, valorHora: 2.0, minimoHoras: 8 },
   reveillon: { 12: 13.68, proporcional: true },
   carnaval: {
     1: 3.05, 2: 6.09, 3: 9.14, 4: 12.18, 5: 15.23, 6: 18.27, 7: 21.32, 8: 35.92,
@@ -83,8 +93,6 @@ const alimentacaoDefault = {
     23: 71.29, 24: 74.64,
   },
 } as any;
-
-type OpItem = { id: string; label: string; inicio: string; fim: string; tipo: OperacaoTipo };
 
 // Utils de datas
 const pad2 = (n: number) => n.toString().padStart(2, "0");
@@ -125,45 +133,6 @@ const carnavalPeriodo = (year: number) => {
   const terca = addDays(pascoa, -47);
   const sexta = addDays(terca, -4);
   return { inicio: toISO(sexta), fim: toISO(terca) };
-};
-
-const buildOpcoes = (year: number): OpItem[] => {
-  const ops: OpItem[] = [];
-  ops.push({
-    id: `ordinaria-01-20-jan-${year}`,
-    label: `01/01 a 20/01/${year}`,
-    inicio: `${year}-01-01`,
-    fim: `${year}-01-20`,
-    tipo: "ordinaria",
-  });
-  for (let m = 0; m <= 10; m++) {
-    const start = new Date(year, m, 21);
-    const end = new Date(year, m + 1, 20);
-    ops.push({
-      id: `ordinaria-21-${pad2(m + 1)}-20-${pad2(m + 2)}-${year}`,
-      label: `21/${pad2(m + 1)} a 20/${pad2(m + 2)}/${year}`,
-      inicio: toISO(start),
-      fim: toISO(end),
-      tipo: "ordinaria",
-    });
-  }
-  ops.push({
-    id: `ordinaria-21-31-dez-${year}`,
-    label: `21/12 a 31/12/${year}`,
-    inicio: `${year}-12-21`,
-    fim: `${year}-12-31`,
-    tipo: "ordinaria",
-  });
-  ops.push({
-    id: `reveillon-${year}`,
-    label: `Reveillon ${year}`,
-    inicio: `${year}-12-24`,
-    fim: `${year + 1}-01-01`,
-    tipo: "reveillon",
-  });
-  const car = carnavalPeriodo(year);
-  ops.push({ id: `carnaval-${year}`, label: `Carnaval ${year}`, inicio: car.inicio, fim: car.fim, tipo: "carnaval" });
-  return ops;
 };
 
 // Persistência
@@ -216,15 +185,23 @@ const Index = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [tab, setTab] = useState<string>("lancamentos");
 
+  // Operações (cadastro manual — nome, tipo, período)
+  const [operacoes, setOperacoes] = useState<Operacao[]>(() => load<Operacao[]>("operacoes", []));
+  const [novaOpNome, setNovaOpNome] = useState("");
+  const [novaOpTipo, setNovaOpTipo] = useState<OperacaoTipo>("ordinaria");
+  const [novaOpInicio, setNovaOpInicio] = useState("");
+  const [novaOpFim, setNovaOpFim] = useState("");
+  const [editandoOpId, setEditandoOpId] = useState<string | null>(null);
+
   // Estado de Lançamento
   const initialYear = new Date().getFullYear();
-  const initialOps = buildOpcoes(initialYear);
   const [ano, setAno] = useState<number>(initialYear);
-  const [operacaoId, setOperacaoId] = useState<string>(initialOps[0]?.id ?? "");
-  const [periodo, setPeriodo] = useState({ inicio: initialOps[0]?.inicio ?? "", fim: initialOps[0]?.fim ?? "" });
+  const [operacaoId, setOperacaoId] = useState<string>("");
+  const [buscaOperacao, setBuscaOperacao] = useState("");
+  const [periodo, setPeriodo] = useState({ inicio: "", fim: "" });
   const [periodoCustomizado, setPeriodoCustomizado] = useState({ inicio: "", fim: "" });
   const [matriculasSelecionadas, setMatriculasSelecionadas] = useState<string[]>([]);
-  const [dias, setDias] = useState<DiaTrabalho[]>([{ data: initialOps[0]?.inicio ?? "", horas: 8, funcao: "coordenador" }]);
+  const [dias, setDias] = useState<DiaTrabalho[]>([{ data: "", horas: 8, funcao: "coordenador" }]);
 
   // Lançamento por data (lote)
   const [loteDias, setLoteDias] = useState<DiaTrabalho[]>([]);
@@ -289,8 +266,19 @@ const Index = () => {
   const [relDataFim, setRelDataFim] = useState("");
   const [relServidor, setRelServidor] = useState<string>("todos");
   const [relIncluirDetalhes, setRelIncluirDetalhes] = useState(false);
+  const [relTipoOperacao, setRelTipoOperacao] = useState<string>("todos");
+  type SortDir = "asc" | "desc";
+  const [relSort, setRelSort] = useState<{ campo: string; dir: SortDir }>({ campo: "nome", dir: "asc" });
+  const [gerenciarSort, setGerenciarSort] = useState<{ campo: string; dir: SortDir }>({ campo: "nome", dir: "asc" });
 
-  const opcoesOperacao = useMemo(() => buildOpcoes(ano), [ano]);
+  const opcoesOperacao = useMemo(() => {
+    const q = buscaOperacao.trim().toLowerCase();
+    return operacoes
+      .filter((o) => new Date(o.periodo.inicio + "T00:00:00").getFullYear() === ano)
+      .filter((o) => !q || o.nome.toLowerCase().includes(q))
+      .map((o) => ({ id: o.id, label: o.nome, inicio: o.periodo.inicio, fim: o.periodo.fim, tipo: o.tipo }))
+      .sort((a, b) => a.inicio.localeCompare(b.inicio));
+  }, [operacoes, ano, buscaOperacao]);
   const selectedOp = useMemo(() => opcoesOperacao.find((o) => o.id === operacaoId), [opcoesOperacao, operacaoId]);
 
   const anosDisponiveis = useMemo(() => {
@@ -300,15 +288,57 @@ const Index = () => {
   }, []);
 
   useEffect(() => {
-    if (!opcoesOperacao.find((o) => o.id === operacaoId)) {
-      const first = opcoesOperacao[0];
-      if (first) {
-        setOperacaoId(first.id);
-        setPeriodo({ inicio: first.inicio, fim: first.fim });
-        setDias([{ data: first.inicio, horas: 8, funcao: "coordenador" }]);
-      }
+    if (operacaoId && opcoesOperacao.find((o) => o.id === operacaoId)) return;
+    const first = opcoesOperacao[0];
+    if (first) {
+      setOperacaoId(first.id);
+      setPeriodo({ inicio: first.inicio, fim: first.fim });
+      setDias([{ data: first.inicio, horas: 8, funcao: "coordenador" }]);
+    } else {
+      setOperacaoId("");
+      setPeriodo({ inicio: "", fim: "" });
     }
-  }, [opcoesOperacao, operacaoId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opcoesOperacao]);
+
+  // CRUD de Operações (Configurações — Master)
+  const salvarOperacao = () => {
+    if (!novaOpNome.trim() || !novaOpInicio || !novaOpFim) {
+      toast({ title: "Preencha nome, tipo e período", variant: "destructive" });
+      return;
+    }
+    if (novaOpFim < novaOpInicio) {
+      toast({ title: "Data final não pode ser antes da inicial", variant: "destructive" });
+      return;
+    }
+    const op: Operacao = {
+      id: editandoOpId ?? crypto.randomUUID(),
+      nome: novaOpNome.trim(),
+      tipo: novaOpTipo,
+      periodo: { inicio: novaOpInicio, fim: novaOpFim },
+    };
+    setOperacoes((prev) => (editandoOpId ? prev.map((o) => (o.id === editandoOpId ? op : o)) : [...prev, op]));
+    setNovaOpNome(""); setNovaOpTipo("ordinaria"); setNovaOpInicio(""); setNovaOpFim(""); setEditandoOpId(null);
+    toast({ title: editandoOpId ? "Operação atualizada" : "Operação criada" });
+  };
+
+  const editarOperacao = (o: Operacao) => {
+    setEditandoOpId(o.id);
+    setNovaOpNome(o.nome);
+    setNovaOpTipo(o.tipo);
+    setNovaOpInicio(o.periodo.inicio);
+    setNovaOpFim(o.periodo.fim);
+  };
+
+  const cancelarEdicaoOperacao = () => {
+    setEditandoOpId(null);
+    setNovaOpNome(""); setNovaOpTipo("ordinaria"); setNovaOpInicio(""); setNovaOpFim("");
+  };
+
+  const excluirOperacao = (id: string) => {
+    setOperacoes((prev) => prev.filter((o) => o.id !== id));
+    toast({ title: "Operação excluída" });
+  };
 
   // Importação Excel
   const [excelFile, setExcelFile] = useState<File | null>(null);
@@ -389,8 +419,8 @@ const Index = () => {
   const valorHora = (f: FuncaoID, tipo: OperacaoTipo) => (valores as any)[tipo]?.[f] || 0;
 
   const calcAlimentacao = (tipo: OperacaoTipo, horas: number) => {
-    if (tipo === "ordinaria") {
-      const cfg = (alimentacao as any).ordinaria || {};
+    if (tipo === "ordinaria" || tipo === "extraordinaria") {
+      const cfg = (alimentacao as any)[tipo] || {};
       const min = cfg.minimoHoras ?? 8;
       const vh = cfg.valorHora ?? 2;
       return horas >= min ? horas * vh : 0;
@@ -452,6 +482,7 @@ const Index = () => {
         return ["coordenador_geral", "coordenador_setorial", "supervisor", "agente_fiscalizacao", "guarda_civil", "agente_operacoes", "assistente_tecnico", "motorista"];
       case "reveillon":
         return ["coordenador", "supervisor1", "supervisor2", "agente_fiscalizacao", "apoio_adm"];
+      case "extraordinaria":
       case "ordinaria":
       default:
         return ["coordenador", "supervisor", "agente_fiscalizacao", "apoio_adm"];
@@ -468,6 +499,7 @@ const Index = () => {
   // Persistência
   useEffect(() => save("servidores", servidores), [servidores]);
   useEffect(() => save("lancamentos", lancamentos), [lancamentos]);
+  useEffect(() => save("operacoes", operacoes), [operacoes]);
   useEffect(() => save("senhaMaster", senhaMaster), [senhaMaster]);
   useEffect(() => save("contatosSetor", contatos), [contatos]);
   useEffect(() => save("gestorSetor", gestor), [gestor]);
@@ -730,6 +762,7 @@ const Index = () => {
 
         const novo: Lancamento = {
           id: editingId ?? crypto.randomUUID(),
+          operacaoId: selectedOp?.id,
           operacao: selectedOp?.tipo ?? "ordinaria",
           nomeOperacao: selectedOp?.label ?? "",
           periodo,
@@ -847,6 +880,7 @@ const Index = () => {
         } else {
           next.unshift({
             id: crypto.randomUUID(),
+            operacaoId: selectedOp?.id,
             operacao: tipo,
             nomeOperacao,
             periodo,
@@ -881,6 +915,7 @@ const Index = () => {
 
   // Consolidação
   const [filtroHistorico, setFiltroHistorico] = useState<string>("todos");
+  const [filtroTipoHistorico, setFiltroTipoHistorico] = useState<string>("todos");
   const [detalheId, setDetalheId] = useState<string | null>(null);
 
   const nomesOperacoesConsolidadas = useMemo(
@@ -925,12 +960,13 @@ const Index = () => {
         (d) =>
           (relFuncao === "todas" || d.funcao === relFuncao) &&
           (relOperacao === "todas" || d.nomeOperacao === relOperacao) &&
+          (relTipoOperacao === "todos" || d.operacaoTipo === relTipoOperacao) &&
           (relAno === "todos" || d.ano === relAno) &&
           (!relDataIni || d.data >= relDataIni) &&
           (!relDataFim || d.data <= relDataFim) &&
           (relServidor === "todos" || d.matricula === relServidor)
       ),
-    [diasFlat, relFuncao, relOperacao, relAno, relDataIni, relDataFim, relServidor]
+    [diasFlat, relFuncao, relOperacao, relTipoOperacao, relAno, relDataIni, relDataFim, relServidor]
   );
 
   const relatorioGrupos = useMemo(() => {
@@ -958,6 +994,35 @@ const Index = () => {
       .sort((a, b) => a.nome.localeCompare(b.nome) || a.nomeOperacao.localeCompare(b.nomeOperacao));
   }, [relatorioFiltrado]);
 
+  const compareOrdenavel = (a: any, b: any) =>
+    typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b), "pt-BR");
+
+  const toggleSort = (setSort: (fn: (prev: { campo: string; dir: SortDir }) => { campo: string; dir: SortDir }) => void, campo: string) =>
+    setSort((prev) => (prev.campo === campo ? { campo, dir: prev.dir === "asc" ? "desc" : "asc" } : { campo, dir: "asc" }));
+
+  const getRelSortValue = (r: (typeof relatorioGrupos)[number], campo: string) => {
+    switch (campo) {
+      case "matricula": return r.matricula;
+      case "nomeOperacao": return r.nomeOperacao;
+      case "diasTrabalhados": return r.diasTrabalhados;
+      case "horas": return r.horas;
+      case "valor": return r.valor;
+      case "alimentacao": return r.alimentacao;
+      case "total": return r.valor + r.alimentacao;
+      case "nome": default: return r.nome;
+    }
+  };
+
+  const relatorioGruposOrdenado = useMemo(() => {
+    const arr = [...relatorioGrupos];
+    arr.sort((a, b) => {
+      const c = compareOrdenavel(getRelSortValue(a, relSort.campo), getRelSortValue(b, relSort.campo));
+      return relSort.dir === "asc" ? c : -c;
+    });
+    return arr;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relatorioGrupos, relSort]);
+
   // Gerenciar Lançamentos — busca e seleção múltipla (1 linha por dia trabalhado)
   const [buscaGerenciarNome, setBuscaGerenciarNome] = useState("");
   const [buscaGerenciarData, setBuscaGerenciarData] = useState("");
@@ -969,12 +1034,33 @@ const Index = () => {
     const q = buscaGerenciarNome.trim().toLowerCase();
     return diasFlat
       .filter((d) => filtroHistorico === "todos" || d.nomeOperacao === filtroHistorico)
+      .filter((d) => filtroTipoHistorico === "todos" || d.operacaoTipo === filtroTipoHistorico)
       .filter((d) => !q || d.nome.toLowerCase().includes(q))
       .filter((d) => !buscaGerenciarData || d.data === buscaGerenciarData)
       .filter((d) => !buscaGerenciarDataIni || d.data >= buscaGerenciarDataIni)
-      .filter((d) => !buscaGerenciarDataFim || d.data <= buscaGerenciarDataFim)
-      .sort((a, b) => b.data.localeCompare(a.data) || a.nome.localeCompare(b.nome));
-  }, [diasFlat, filtroHistorico, buscaGerenciarNome, buscaGerenciarData, buscaGerenciarDataIni, buscaGerenciarDataFim]);
+      .filter((d) => !buscaGerenciarDataFim || d.data <= buscaGerenciarDataFim);
+  }, [diasFlat, filtroHistorico, filtroTipoHistorico, buscaGerenciarNome, buscaGerenciarData, buscaGerenciarDataIni, buscaGerenciarDataFim]);
+
+  const getGerenciarSortValue = (d: (typeof gerenciarLinhas)[number], campo: string) => {
+    switch (campo) {
+      case "data": return d.data;
+      case "funcao": return funcaoLabel(d.funcao);
+      case "nomeOperacao": return d.nomeOperacao;
+      case "horas": return d.horas;
+      case "total": return d.valor + d.alimentacao;
+      case "nome": default: return d.nome;
+    }
+  };
+
+  const gerenciarLinhasOrdenadas = useMemo(() => {
+    const arr = [...gerenciarLinhas];
+    arr.sort((a, b) => {
+      const c = compareOrdenavel(getGerenciarSortValue(a, gerenciarSort.campo), getGerenciarSortValue(b, gerenciarSort.campo));
+      return gerenciarSort.dir === "asc" ? c : -c;
+    });
+    return arr;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gerenciarLinhas, gerenciarSort]);
 
   const linhaKey = (lancamentoId: string, data: string) => `${lancamentoId}::${data}`;
 
@@ -1022,12 +1108,12 @@ const Index = () => {
   };
 
   const exportarGerenciarExcel = () => {
-    if (gerenciarLinhas.length === 0) {
+    if (gerenciarLinhasOrdenadas.length === 0) {
       toast({ title: "Nenhum lançamento para exportar", variant: "destructive" });
       return;
     }
     const headers = ["Servidor", "Matrícula", "CPF", "Operação", "Data Trabalhada", "Função", "Horas", "Valor Horas", "Alimentação", "Total"];
-    const rows = gerenciarLinhas.map((d) => [
+    const rows = gerenciarLinhasOrdenadas.map((d) => [
       d.nome, d.matricula, formatarCPF(d.cpf), d.nomeOperacao, toBR(d.data), funcaoLabel(d.funcao),
       d.horas, Number(d.valor.toFixed(2)), Number(d.alimentacao.toFixed(2)), Number((d.valor + d.alimentacao).toFixed(2)),
     ]);
@@ -1116,23 +1202,25 @@ const Index = () => {
 
   // PDF — Relatório Geral (por servidor/operação), com modo detalhado opcional
   const gerarRelatorioModuloPDF = () => {
-    if (relatorioGrupos.length === 0) {
+    if (relatorioGruposOrdenado.length === 0) {
       toast({ title: "Nenhum dado para o filtro selecionado", variant: "destructive" });
       return;
     }
     const doc = new jsPDF({ orientation: "landscape" });
+    const tipoLabels: Record<string, string> = { ordinaria: "Ordinária", extraordinaria: "Extraordinária", reveillon: "Reveillon", carnaval: "Carnaval" };
     const subtitulo = [
       relOperacao === "todas" ? "Todas as operações" : relOperacao,
+      relTipoOperacao === "todos" ? "" : `Tipo: ${tipoLabels[relTipoOperacao] ?? relTipoOperacao}`,
       relAno === "todos" ? "Todos os anos" : relAno,
       relFuncao === "todas" ? "" : funcaoLabel(relFuncao as FuncaoID),
     ].filter(Boolean).join(" • ");
 
     let y = drawHeader(doc, "Relatório Geral de Servidores", subtitulo);
 
-    const acc = relatorioGrupos.reduce((a, r) => ({ h: a.h + r.horas, v: a.v + r.valor, al: a.al + r.alimentacao }), { h: 0, v: 0, al: 0 });
+    const acc = relatorioGruposOrdenado.reduce((a, r) => ({ h: a.h + r.horas, v: a.v + r.valor, al: a.al + r.alimentacao }), { h: 0, v: 0, al: 0 });
 
     if (!relIncluirDetalhes) {
-      const rows = relatorioGrupos.map((r) => [r.matricula, r.nome, r.nomeOperacao, String(r.diasTrabalhados), r.horas.toFixed(2), fmtBRL(r.valor), fmtBRL(r.alimentacao), fmtBRL(r.valor + r.alimentacao)]);
+      const rows = relatorioGruposOrdenado.map((r) => [r.matricula, r.nome, r.nomeOperacao, String(r.diasTrabalhados), r.horas.toFixed(2), fmtBRL(r.valor), fmtBRL(r.alimentacao), fmtBRL(r.valor + r.alimentacao)]);
       autoTable(doc, {
         startY: y,
         head: [["Matrícula", "Nome", "Operação", "Dias Trabalhados", "Horas", "Valor Horas", "Alimentação", "Total"]],
@@ -1143,7 +1231,7 @@ const Index = () => {
       });
     } else {
       // Modo detalhado: para cada servidor/operação, um bloco com as datas trabalhadas individualmente
-      relatorioGrupos.forEach((g) => {
+      relatorioGruposOrdenado.forEach((g) => {
         const espacoNecessario = 20 + g.dias.length * 7;
         if (y + espacoNecessario > 190) {
           doc.addPage();
@@ -1184,29 +1272,40 @@ const Index = () => {
 
   // Excel — Relatório Geral (por servidor/operação), com modo detalhado opcional
   const exportarRelatorioExcel = () => {
-    if (relatorioGrupos.length === 0) {
+    if (relatorioGruposOrdenado.length === 0) {
       toast({ title: "Nenhum dado para o filtro selecionado", variant: "destructive" });
       return;
     }
     const wb = XLSX.utils.book_new();
+    const tipoLabels: Record<string, string> = { ordinaria: "Ordinária", extraordinaria: "Extraordinária", reveillon: "Reveillon", carnaval: "Carnaval" };
+    const filtrosAplicados: (string | number)[][] = [
+      ["Filtros aplicados"],
+      ["Operação", relOperacao === "todas" ? "Todas" : relOperacao],
+      ["Tipo de Operação", relTipoOperacao === "todos" ? "Todos" : (tipoLabels[relTipoOperacao] ?? relTipoOperacao)],
+      ["Ano", relAno === "todos" ? "Todos" : relAno],
+      ["Função", relFuncao === "todas" ? "Todas" : funcaoLabel(relFuncao as FuncaoID)],
+      ["Servidor", relServidor === "todos" ? "Todos" : (servidores.find((s) => s.matricula === relServidor)?.nome ?? relServidor)],
+      ["Período (data trabalhada)", `${relDataIni ? toBR(relDataIni) : "—"} a ${relDataFim ? toBR(relDataFim) : "—"}`],
+      [],
+    ];
 
     if (!relIncluirDetalhes) {
       const headers = ["Matrícula", "Nome", "Operação", "Dias Trabalhados", "Horas", "Valor Horas", "Alimentação", "Total"];
-      const rows = relatorioGrupos.map((r) => [
+      const rows = relatorioGruposOrdenado.map((r) => [
         r.matricula, r.nome, r.nomeOperacao, r.diasTrabalhados,
         Number(r.horas.toFixed(2)), Number(r.valor.toFixed(2)), Number(r.alimentacao.toFixed(2)), Number((r.valor + r.alimentacao).toFixed(2)),
       ]);
-      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const ws = XLSX.utils.aoa_to_sheet([...filtrosAplicados, headers, ...rows]);
       XLSX.utils.book_append_sheet(wb, ws, "Relatorio Geral");
     } else {
       const headers = ["Matrícula", "Nome", "Operação", "Data Trabalhada", "Função", "Horas", "Valor Horas", "Alimentação", "Total"];
       const rows: (string | number)[][] = [];
-      relatorioGrupos.forEach((g) => {
+      relatorioGruposOrdenado.forEach((g) => {
         g.dias.forEach((d) => {
           rows.push([g.matricula, g.nome, g.nomeOperacao, toBR(d.data), funcaoLabel(d.funcao), d.horas, Number(d.valor.toFixed(2)), Number(d.alimentacao.toFixed(2)), Number((d.valor + d.alimentacao).toFixed(2))]);
         });
       });
-      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const ws = XLSX.utils.aoa_to_sheet([...filtrosAplicados, headers, ...rows]);
       XLSX.utils.book_append_sheet(wb, ws, "Relatorio Detalhado");
     }
 
@@ -1227,9 +1326,11 @@ const Index = () => {
 
   const editarLancamento = (l: Lancamento) => {
     setEditingId(l.id);
-    const y = new Date(l.periodo.inicio).getFullYear();
+    const y = new Date(l.periodo.inicio + "T00:00:00").getFullYear();
     setAno(y);
-    const op = buildOpcoes(y).find((o) => o.inicio === l.periodo.inicio && o.fim === l.periodo.fim && o.tipo === l.operacao);
+    const op = l.operacaoId
+      ? operacoes.find((o) => o.id === l.operacaoId)
+      : operacoes.find((o) => o.periodo.inicio === l.periodo.inicio && o.periodo.fim === l.periodo.fim && o.tipo === l.operacao);
     if (op) setOperacaoId(op.id);
     setPeriodo(l.periodo);
     setMatriculasSelecionadas([l.servidor.matricula]);
@@ -1376,6 +1477,11 @@ const Index = () => {
                   </div>
 
                   <div className="space-y-2">
+                    <Label>Buscar operação</Label>
+                    <Input value={buscaOperacao} onChange={(e) => setBuscaOperacao(e.target.value)} placeholder="Buscar por nome..." />
+                  </div>
+
+                  <div className="space-y-2">
                     <Label>Operação</Label>
                     <Select
                       value={operacaoId}
@@ -1384,16 +1490,19 @@ const Index = () => {
                         const op = opcoesOperacao.find((o) => o.id === v);
                         if (op) {
                           setPeriodo({ inicio: op.inicio, fim: op.fim });
-                          setLoteDatas([]);
+                          setLoteDias([]);
                           setDias((d) => (d.length === 0 ? [{ data: op.inicio, horas: 8, funcao: getFuncoesDisponiveisParaOperacao(op.tipo)[0] }] : d));
                         }
                       }}
                     >
-                      <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder={opcoesOperacao.length === 0 ? "Nenhuma operação cadastrada" : "Selecione"} /></SelectTrigger>
                       <SelectContent className="z-50">
                         {opcoesOperacao.map((op) => (<SelectItem key={op.id} value={op.id}>{op.label}</SelectItem>))}
                       </SelectContent>
                     </Select>
+                    {opcoesOperacao.length === 0 && (
+                      <div className="text-xs text-muted-foreground">Nenhuma operação cadastrada para {ano}. Cadastre em Configurações → Gerenciar Operações.</div>
+                    )}
                   </div>
 
                   {selectedOp?.tipo === "carnaval" && (
@@ -1525,16 +1634,31 @@ const Index = () => {
                 <CardHeader><CardTitle>Datas e carga horária</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
                   <div className="space-y-2">
+                    <Label>Ano</Label>
+                    <Select value={String(ano)} onValueChange={(v) => setAno(Number(v))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent className="z-50">
+                        {anosDisponiveis.map((y) => (<SelectItem key={y} value={String(y)}>{y}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Buscar operação</Label>
+                    <Input value={buscaOperacao} onChange={(e) => setBuscaOperacao(e.target.value)} placeholder="Buscar por nome..." />
+                  </div>
+
+                  <div className="space-y-2">
                     <Label>Operação</Label>
                     <Select
                       value={operacaoId}
                       onValueChange={(v) => {
                         setOperacaoId(v);
                         const op = opcoesOperacao.find((o) => o.id === v);
-                        if (op) { setPeriodo({ inicio: op.inicio, fim: op.fim }); setLoteDatas([]); }
+                        if (op) { setPeriodo({ inicio: op.inicio, fim: op.fim }); setLoteDias([]); }
                       }}
                     >
-                      <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder={opcoesOperacao.length === 0 ? "Nenhuma operação cadastrada" : "Selecione"} /></SelectTrigger>
                       <SelectContent className="z-50">
                         {opcoesOperacao.map((op) => (<SelectItem key={op.id} value={op.id}>{op.label}</SelectItem>))}
                       </SelectContent>
@@ -1654,7 +1778,7 @@ const Index = () => {
             <Card>
               <CardHeader><CardTitle>Gerenciar Lançamentos</CardTitle></CardHeader>
               <CardContent>
-                <div className="grid md:grid-cols-5 gap-3 mb-4">
+                <div className="grid md:grid-cols-6 gap-3 mb-4">
                   <div className="space-y-1">
                     <Label className="text-xs">Operação</Label>
                     <Select value={filtroHistorico} onValueChange={setFiltroHistorico}>
@@ -1662,6 +1786,19 @@ const Index = () => {
                       <SelectContent className="z-50">
                         <SelectItem value="todos">Todas as Operações</SelectItem>
                         {nomesOperacoesConsolidadas.map((n) => (<SelectItem key={n} value={n}>{n}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Tipo de Operação</Label>
+                    <Select value={filtroTipoHistorico} onValueChange={setFiltroTipoHistorico}>
+                      <SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger>
+                      <SelectContent className="z-50">
+                        <SelectItem value="todos">Todos os tipos</SelectItem>
+                        <SelectItem value="ordinaria">Ordinária</SelectItem>
+                        <SelectItem value="extraordinaria">Extraordinária</SelectItem>
+                        <SelectItem value="reveillon">Reveillon</SelectItem>
+                        <SelectItem value="carnaval">Carnaval</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1692,10 +1829,10 @@ const Index = () => {
                   >
                     Excluir selecionados {linhasSelecionadas.size > 0 ? `(${linhasSelecionadas.size})` : ""}
                   </Button>
-                  {(buscaGerenciarNome || buscaGerenciarData || buscaGerenciarDataIni || buscaGerenciarDataFim || filtroHistorico !== "todos") && (
+                  {(buscaGerenciarNome || buscaGerenciarData || buscaGerenciarDataIni || buscaGerenciarDataFim || filtroHistorico !== "todos" || filtroTipoHistorico !== "todos") && (
                     <Button
                       variant="outline"
-                      onClick={() => { setBuscaGerenciarNome(""); setBuscaGerenciarData(""); setBuscaGerenciarDataIni(""); setBuscaGerenciarDataFim(""); setFiltroHistorico("todos"); }}
+                      onClick={() => { setBuscaGerenciarNome(""); setBuscaGerenciarData(""); setBuscaGerenciarDataIni(""); setBuscaGerenciarDataFim(""); setFiltroHistorico("todos"); setFiltroTipoHistorico("todos"); }}
                     >
                       Limpar filtros
                     </Button>
@@ -1708,30 +1845,42 @@ const Index = () => {
                       <TableRow>
                         <TableHead className="w-10">
                           <Checkbox
-                            checked={gerenciarLinhas.length > 0 && gerenciarLinhas.every((d) => linhasSelecionadas.has(linhaKey(d.lancamentoId, d.data)))}
+                            checked={gerenciarLinhasOrdenadas.length > 0 && gerenciarLinhasOrdenadas.every((d) => linhasSelecionadas.has(linhaKey(d.lancamentoId, d.data)))}
                             onCheckedChange={(checked) => {
                               if (checked) {
-                                setLinhasSelecionadas(new Set(gerenciarLinhas.map((d) => linhaKey(d.lancamentoId, d.data))));
+                                setLinhasSelecionadas(new Set(gerenciarLinhasOrdenadas.map((d) => linhaKey(d.lancamentoId, d.data))));
                               } else {
                                 setLinhasSelecionadas(new Set());
                               }
                             }}
                           />
                         </TableHead>
-                        <TableHead>Servidor</TableHead>
-                        <TableHead>Data Trabalhada</TableHead>
-                        <TableHead>Função</TableHead>
-                        <TableHead>Operação</TableHead>
-                        <TableHead>Horas</TableHead>
-                        <TableHead>Total</TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setGerenciarSort, "nome")}>
+                          Servidor {gerenciarSort.campo === "nome" ? (gerenciarSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setGerenciarSort, "data")}>
+                          Data Trabalhada {gerenciarSort.campo === "data" ? (gerenciarSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setGerenciarSort, "funcao")}>
+                          Função {gerenciarSort.campo === "funcao" ? (gerenciarSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setGerenciarSort, "nomeOperacao")}>
+                          Operação {gerenciarSort.campo === "nomeOperacao" ? (gerenciarSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setGerenciarSort, "horas")}>
+                          Horas {gerenciarSort.campo === "horas" ? (gerenciarSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setGerenciarSort, "total")}>
+                          Total {gerenciarSort.campo === "total" ? (gerenciarSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
                         <TableHead>Ações</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {gerenciarLinhas.length === 0 && (
+                      {gerenciarLinhasOrdenadas.length === 0 && (
                         <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground">Nenhum lançamento encontrado.</TableCell></TableRow>
                       )}
-                      {gerenciarLinhas.map((d) => {
+                      {gerenciarLinhasOrdenadas.map((d) => {
                         const key = linhaKey(d.lancamentoId, d.data);
                         const l = lancamentos.find((x) => x.id === d.lancamentoId);
                         return (
@@ -1798,6 +1947,19 @@ const Index = () => {
                     </Select>
                   </div>
                   <div className="space-y-1">
+                    <Label className="text-xs">Tipo de Operação</Label>
+                    <Select value={relTipoOperacao} onValueChange={setRelTipoOperacao}>
+                      <SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger>
+                      <SelectContent className="z-50">
+                        <SelectItem value="todos">Todos os tipos</SelectItem>
+                        <SelectItem value="ordinaria">Ordinária</SelectItem>
+                        <SelectItem value="extraordinaria">Extraordinária</SelectItem>
+                        <SelectItem value="reveillon">Reveillon</SelectItem>
+                        <SelectItem value="carnaval">Carnaval</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
                     <Label className="text-xs">Ano</Label>
                     <Select value={relAno} onValueChange={setRelAno}>
                       <SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger>
@@ -1828,7 +1990,7 @@ const Index = () => {
                   </label>
                   <Button
                     variant="outline"
-                    onClick={() => { setRelFuncao("todas"); setRelOperacao("todas"); setRelAno("todos"); setRelDataIni(""); setRelDataFim(""); setRelServidor("todos"); }}
+                    onClick={() => { setRelFuncao("todas"); setRelOperacao("todas"); setRelTipoOperacao("todos"); setRelAno("todos"); setRelDataIni(""); setRelDataFim(""); setRelServidor("todos"); }}
                   >
                     Limpar filtros (Geral)
                   </Button>
@@ -1838,21 +2000,37 @@ const Index = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Matrícula</TableHead>
-                        <TableHead>Nome</TableHead>
-                        <TableHead>Operação</TableHead>
-                        <TableHead>Dias Trabalhados</TableHead>
-                        <TableHead>Horas</TableHead>
-                        <TableHead>Valor Horas</TableHead>
-                        <TableHead>Alimentação</TableHead>
-                        <TableHead>Total</TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setRelSort, "matricula")}>
+                          Matrícula {relSort.campo === "matricula" ? (relSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setRelSort, "nome")}>
+                          Nome {relSort.campo === "nome" ? (relSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setRelSort, "nomeOperacao")}>
+                          Operação {relSort.campo === "nomeOperacao" ? (relSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setRelSort, "diasTrabalhados")}>
+                          Dias Trabalhados {relSort.campo === "diasTrabalhados" ? (relSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setRelSort, "horas")}>
+                          Horas {relSort.campo === "horas" ? (relSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setRelSort, "valor")}>
+                          Valor Horas {relSort.campo === "valor" ? (relSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setRelSort, "alimentacao")}>
+                          Alimentação {relSort.campo === "alimentacao" ? (relSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort(setRelSort, "total")}>
+                          Total {relSort.campo === "total" ? (relSort.dir === "asc" ? "▲" : "▼") : ""}
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {relatorioGrupos.length === 0 && (
+                      {relatorioGruposOrdenado.length === 0 && (
                         <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground">Nenhum dado para o filtro selecionado.</TableCell></TableRow>
                       )}
-                      {relatorioGrupos.map((r) => (
+                      {relatorioGruposOrdenado.map((r) => (
                         <TableRow key={`${r.matricula}::${r.nomeOperacao}`}>
                           <TableCell>{r.matricula}</TableCell>
                           <TableCell>{r.nome}</TableCell>
@@ -1965,7 +2143,7 @@ const Index = () => {
                 <CardHeader><CardTitle>Valores por Operação</CardTitle></CardHeader>
                 <CardContent>
                   <div className="grid md:grid-cols-3 gap-6">
-                    {(["ordinaria", "reveillon", "carnaval"] as OperacaoTipo[]).map((tipo) => (
+                    {(["ordinaria", "extraordinaria", "reveillon", "carnaval"] as OperacaoTipo[]).map((tipo) => (
                       <div key={tipo}>
                         <h4 className="font-medium mb-3 capitalize">Operação {tipo}</h4>
                         <div className="grid grid-cols-2 gap-2">
@@ -1986,7 +2164,7 @@ const Index = () => {
                     ))}
                   </div>
 
-                  <div className="mt-6 grid md:grid-cols-3 gap-6">
+                  <div className="mt-6 grid md:grid-cols-4 gap-6">
                     <div>
                       <h5 className="text-sm font-medium mb-2">Alimentação — Ordinária</h5>
                       <Label className="text-xs">Valor por hora (mínimo 8h)</Label>
@@ -1995,6 +2173,17 @@ const Index = () => {
                         step="0.01"
                         value={(alimentacao as any).ordinaria?.valorHora ?? 2}
                         onChange={(e) => setAlimentacao((prev: any) => ({ ...prev, ordinaria: { ...prev.ordinaria, valorHora: Number(e.target.value) } }))}
+                        className="text-xs"
+                      />
+                    </div>
+                    <div>
+                      <h5 className="text-sm font-medium mb-2">Alimentação — Extraordinária</h5>
+                      <Label className="text-xs">Valor por hora (mínimo 8h)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={(alimentacao as any).extraordinaria?.valorHora ?? 2}
+                        onChange={(e) => setAlimentacao((prev: any) => ({ ...prev, extraordinaria: { ...prev.extraordinaria, valorHora: Number(e.target.value) } }))}
                         className="text-xs"
                       />
                     </div>
@@ -2030,6 +2219,71 @@ const Index = () => {
                     </div>
                   </div>
                   <Button className="mt-4" onClick={salvarAlteracoes}>Salvar valores</Button>
+                </CardContent>
+              </Card>
+
+              <Card className="md:col-span-2">
+                <CardHeader><CardTitle>Gerenciar Operações</CardTitle></CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid md:grid-cols-5 gap-2 items-end">
+                    <div className="space-y-1 md:col-span-2">
+                      <Label className="text-xs">Nome</Label>
+                      <Input value={novaOpNome} onChange={(e) => setNovaOpNome(e.target.value)} placeholder="Ex.: Operação 21/05 a 20/06/2026" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Tipo</Label>
+                      <Select value={novaOpTipo} onValueChange={(v: OperacaoTipo) => setNovaOpTipo(v)}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent className="z-50">
+                          <SelectItem value="ordinaria">Ordinária</SelectItem>
+                          <SelectItem value="extraordinaria">Extraordinária</SelectItem>
+                          <SelectItem value="reveillon">Reveillon</SelectItem>
+                          <SelectItem value="carnaval">Carnaval</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Início</Label>
+                      <Input type="date" value={novaOpInicio} onChange={(e) => setNovaOpInicio(e.target.value)} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Fim</Label>
+                      <Input type="date" value={novaOpFim} onChange={(e) => setNovaOpFim(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button onClick={salvarOperacao}>{editandoOpId ? "Salvar alterações" : "+ Criar operação"}</Button>
+                    {editandoOpId && <Button variant="outline" onClick={cancelarEdicaoOperacao}>Cancelar edição</Button>}
+                  </div>
+
+                  <div className="rounded-md border overflow-auto" style={{ boxShadow: "var(--shadow-elevated)" }}>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Nome</TableHead>
+                          <TableHead>Tipo</TableHead>
+                          <TableHead>Período</TableHead>
+                          <TableHead>Ações</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {operacoes.length === 0 && (
+                          <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground">Nenhuma operação cadastrada.</TableCell></TableRow>
+                        )}
+                        {[...operacoes].sort((a, b) => b.periodo.inicio.localeCompare(a.periodo.inicio)).map((o) => (
+                          <TableRow key={o.id}>
+                            <TableCell>{o.nome}</TableCell>
+                            <TableCell className="capitalize">{o.tipo}</TableCell>
+                            <TableCell>{toBR(o.periodo.inicio)} a {toBR(o.periodo.fim)}</TableCell>
+                            <TableCell className="flex gap-2 flex-wrap">
+                              <Button size="sm" variant="secondary" onClick={() => editarOperacao(o)}>Editar</Button>
+                              <Button size="sm" variant="destructive" onClick={() => excluirOperacao(o.id)}>Excluir</Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </CardContent>
               </Card>
 
