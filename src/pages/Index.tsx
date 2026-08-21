@@ -950,6 +950,7 @@ const Index = () => {
   const [importAnaliseFeita, setImportAnaliseFeita] = useState(false);
   const [importResultados, setImportResultados] = useState<ImportAvaliacao[]>([]);
   const [importAvisosGerais, setImportAvisosGerais] = useState<string[]>([]);
+  const [importAbasConcluidas, setImportAbasConcluidas] = useState<Set<string>>(new Set());
   const [importando, setImportando] = useState(false);
   const [detalheId, setDetalheId] = useState<string | null>(null);
 
@@ -1171,6 +1172,7 @@ const Index = () => {
       setImportAnaliseFeita(false);
       setImportResultados([]);
       setImportAvisosGerais([]);
+      setImportAbasConcluidas(new Set());
     } catch (e) {
       console.error(e);
       toast({ title: "Não foi possível ler o arquivo", variant: "destructive" });
@@ -1324,10 +1326,12 @@ const Index = () => {
       return next;
     });
     toast({ title: "Importação concluída com sucesso", description: `${comDias.length} servidor(es), ${totalDias} dia(s) importado(s)` });
-    setMostrarImportacao(false);
-    setImportArquivo(null);
-    setImportAbas([]);
-    setImportAbaSelecionada("");
+
+    // Mantém o arquivo carregado — permite seguir importando as outras abas sem reenviar o Excel
+    const abaImportada = importAbaSelecionada;
+    setImportAbasConcluidas((prev) => new Set(prev).add(abaImportada));
+    const proximaAba = importAbas.find((a) => a !== abaImportada && !importAbasConcluidas.has(a));
+    setImportAbaSelecionada(proximaAba ?? "");
     setImportOperacaoId("");
     setImportAnaliseFeita(false);
     setImportResultados([]);
@@ -2008,6 +2012,31 @@ const Index = () => {
                       Reconhece automaticamente as colunas de data (pares H/F). Valores em R$ não são importados — o sistema recalcula pela tabela de valores vigente da Operação escolhida.
                     </p>
 
+                    {importArquivo && (
+                      <div className="flex items-center gap-2 text-xs bg-background rounded border p-2">
+                        <span className="text-muted-foreground">Arquivo carregado:</span>
+                        <span className="font-medium">{importArquivo.name}</span>
+                        <span className="text-muted-foreground">— {importAbasConcluidas.size} de {importAbas.length} aba(s) já importada(s) nesta sessão</span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="ml-auto"
+                          onClick={() => {
+                            setImportArquivo(null);
+                            setImportAbas([]);
+                            setImportAbaSelecionada("");
+                            setImportOperacaoId("");
+                            setImportAnaliseFeita(false);
+                            setImportResultados([]);
+                            setImportAvisosGerais([]);
+                            setImportAbasConcluidas(new Set());
+                          }}
+                        >
+                          Trocar de arquivo
+                        </Button>
+                      </div>
+                    )}
+
                     <div className="grid md:grid-cols-3 gap-3">
                       <div className="space-y-1">
                         <Label className="text-xs">Arquivo Excel</Label>
@@ -2022,7 +2051,9 @@ const Index = () => {
                         <Select value={importAbaSelecionada} onValueChange={setImportAbaSelecionada} disabled={importAbas.length === 0}>
                           <SelectTrigger><SelectValue placeholder={importAbas.length === 0 ? "Selecione um arquivo primeiro" : "Selecione"} /></SelectTrigger>
                           <SelectContent className="z-50">
-                            {importAbas.map((a) => (<SelectItem key={a} value={a}>{a}</SelectItem>))}
+                            {importAbas.map((a) => (
+                              <SelectItem key={a} value={a}>{a}{importAbasConcluidas.has(a) ? " ✓ (já importada)" : ""}</SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </div>
