@@ -1216,18 +1216,45 @@ const Index = () => {
         return;
       }
 
-      const header = matriz[headerIdx].map((c) => normalize(c));
-      const dateRow = matriz[headerIdx - 1] || [];
-      const iNome = header.findIndex((h) => h === "NOME");
-      const iMat = header.findIndex((h) => h.startsWith("MATRICULA"));
-      const iCpf = header.findIndex((h) => h === "CPF");
+      const iNome = matriz[headerIdx].findIndex((c) => normalize(c) === "NOME");
+      const iMat = matriz[headerIdx].findIndex((c) => normalize(c).startsWith("MATRICULA"));
+      const iCpf = matriz[headerIdx].findIndex((c) => normalize(c) === "CPF");
 
-      // Detecta pares de colunas H/F cuja linha de cima tem uma data válida
+      // A linha com os rótulos "H"/"F" pode estar logo ACIMA ou logo ABAIXO da linha
+      // NOME/MATRÍCULA/CPF, dependendo do modelo da planilha — procura nas duas direções.
+      let rowHFIdx = -1;
+      let melhorContagem = 0;
+      for (const idx of [headerIdx + 1, headerIdx - 1, headerIdx]) {
+        if (idx < 0 || idx >= matriz.length) continue;
+        const linha = matriz[idx] || [];
+        const contagem = linha.filter((c) => normalize(c) === "H" || normalize(c) === "F").length;
+        if (contagem > melhorContagem) {
+          melhorContagem = contagem;
+          rowHFIdx = idx;
+        }
+      }
+      if (rowHFIdx === -1 || melhorContagem < 2) {
+        toast({ title: "Linha de horas/função (H/F) não encontrada nessa aba", variant: "destructive" });
+        setImportando(false);
+        return;
+      }
+      const rowHF = (matriz[rowHFIdx] || []).map((c) => normalize(c));
+      // A data de cada coluna pode estar na linha imediatamente acima OU abaixo da linha H/F
+      const linhasCandidatasData = [matriz[rowHFIdx - 1] || [], matriz[rowHFIdx + 1] || []];
+
+      // Detecta pares de colunas H/F cuja linha vizinha tem uma data válida
       const colunasData: { horasCol: number; funcaoCol: number; data: string }[] = [];
-      for (let c = 3; c < header.length; c++) {
-        if (header[c] !== "H") continue;
-        const dataISO = excelDateToISO(dateRow[c]) || excelDateToISO(dateRow[c + 1]);
-        if (!dataISO || !/^\d{4}-\d{2}-\d{2}$/.test(dataISO)) continue;
+      for (let c = 3; c < rowHF.length; c++) {
+        if (rowHF[c] !== "H") continue;
+        let dataISO = "";
+        for (const linhaData of linhasCandidatasData) {
+          const tentativa = excelDateToISO(linhaData[c]) || excelDateToISO(linhaData[c + 1]);
+          if (tentativa && /^\d{4}-\d{2}-\d{2}$/.test(tentativa)) {
+            dataISO = tentativa;
+            break;
+          }
+        }
+        if (!dataISO) continue;
         colunasData.push({ horasCol: c, funcaoCol: c + 1, data: dataISO });
       }
 
@@ -1239,8 +1266,9 @@ const Index = () => {
 
       const avisosGerais: string[] = [];
       const resultados: ImportAvaliacao[] = [];
+      const primeiraLinhaDados = Math.max(headerIdx, rowHFIdx) + 1;
 
-      for (let r = headerIdx + 1; r < matriz.length; r++) {
+      for (let r = primeiraLinhaDados; r < matriz.length; r++) {
         const row = matriz[r] || [];
         const nomePlanilha = String(row[iNome] ?? "").trim();
         const matriculaPlanilha = String(row[iMat] ?? "").trim();
