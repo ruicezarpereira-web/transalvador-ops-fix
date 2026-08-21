@@ -50,6 +50,13 @@ type SystemUser = {
   mustChangePassword: boolean;
 };
 
+type ImportAvaliacao = {
+  matricula: string;
+  nome: string;
+  diasNovos: DiaTrabalho[];
+  avisos: string[];
+};
+
 const valoresDefault = {
   ordinaria: {
     coordenador: 20.5,
@@ -933,6 +940,17 @@ const Index = () => {
   // Consolidação
   const [filtroHistorico, setFiltroHistorico] = useState<string>("todos");
   const [filtroTipoHistorico, setFiltroTipoHistorico] = useState<string>("todos");
+
+  // Importação de lançamentos antigos (Excel)
+  const [mostrarImportacao, setMostrarImportacao] = useState(false);
+  const [importArquivo, setImportArquivo] = useState<File | null>(null);
+  const [importAbas, setImportAbas] = useState<string[]>([]);
+  const [importAbaSelecionada, setImportAbaSelecionada] = useState<string>("");
+  const [importOperacaoId, setImportOperacaoId] = useState<string>("");
+  const [importAnaliseFeita, setImportAnaliseFeita] = useState(false);
+  const [importResultados, setImportResultados] = useState<ImportAvaliacao[]>([]);
+  const [importAvisosGerais, setImportAvisosGerais] = useState<string[]>([]);
+  const [importando, setImportando] = useState(false);
   const [detalheId, setDetalheId] = useState<string | null>(null);
 
   const nomesOperacoesConsolidadas = useMemo(
@@ -1139,6 +1157,181 @@ const Index = () => {
     XLSX.utils.book_append_sheet(wb, ws, "Lancamentos");
     XLSX.writeFile(wb, "Gerenciar_Lancamentos.xlsx");
     toast({ title: "Excel gerado" });
+  };
+
+  // Importação de lançamentos antigos — planilha modelo NOME/MATRICULA/CPF + colunas H/F por data
+  const selecionarArquivoImportacao = async (file: File) => {
+    setImportando(true);
+    try {
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      setImportArquivo(file);
+      setImportAbas(wb.SheetNames);
+      setImportAbaSelecionada(wb.SheetNames[0] ?? "");
+      setImportAnaliseFeita(false);
+      setImportResultados([]);
+      setImportAvisosGerais([]);
+    } catch (e) {
+      console.error(e);
+      toast({ title: "Não foi possível ler o arquivo", variant: "destructive" });
+    } finally {
+      setImportando(false);
+    }
+  };
+
+  const funcaoDePara = (texto: string): FuncaoID | null => {
+    const n = normalize(texto);
+    if (n.includes("COORD")) return "coordenador";
+    if (n.includes("SUPERV")) return "supervisor";
+    if (n.includes("AGENT")) return "agente_fiscalizacao";
+    if (n.includes("APOIO")) return "apoio_adm";
+    return null;
+  };
+
+  const analisarImportacao = async () => {
+    if (!importArquivo || !importAbaSelecionada) {
+      toast({ title: "Selecione o arquivo e a aba", variant: "destructive" });
+      return;
+    }
+    const opAlvo = operacoes.find((o) => o.id === importOperacaoId);
+    if (!opAlvo) {
+      toast({ title: "Selecione a Operação de destino", variant: "destructive" });
+      return;
+    }
+    setImportando(true);
+    try {
+      const data = await importArquivo.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      const ws = wb.Sheets[importAbaSelecionada];
+      const matriz: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+
+      const headerIdx = matriz.findIndex(
+        (row) => row.some((c) => normalize(c) === "NOME") && row.some((c) => normalize(c).startsWith("MATRICULA"))
+      );
+      if (headerIdx < 1) {
+        toast({ title: "Cabeçalho não encontrado nessa aba", description: "Esperado colunas NOME e MATRÍCULA.", variant: "destructive" });
+        setImportando(false);
+        return;
+      }
+
+      const header = matriz[headerIdx].map((c) => normalize(c));
+      const dateRow = matriz[headerIdx - 1] || [];
+      const iNome = header.findIndex((h) => h === "NOME");
+      const iMat = header.findIndex((h) => h.startsWith("MATRICULA"));
+      const iCpf = header.findIndex((h) => h === "CPF");
+
+      // Detecta pares de colunas H/F cuja linha de cima tem uma data válida
+      const colunasData: { horasCol: number; funcaoCol: number; data: string }[] = [];
+      for (let c = 3; c < header.length; c++) {
+        if (header[c] !== "H") continue;
+        const dataISO = excelDateToISO(dateRow[c]) || excelDateToISO(dateRow[c + 1]);
+        if (!dataISO || !/^\d{4}-\d{2}-\d{2}$/.test(dataISO)) continue;
+        colunasData.push({ horasCol: c, funcaoCol: c + 1, data: dataISO });
+      }
+
+      if (colunasData.length === 0) {
+        toast({ title: "Nenhuma coluna de data reconhecida nessa aba", variant: "destructive" });
+        setImportando(false);
+        return;
+      }
+
+      const avisosGerais: string[] = [];
+      const resultados: ImportAvaliacao[] = [];
+
+      for (let r = headerIdx + 1; r < matriz.length; r++) {
+        const row = matriz[r] || [];
+        const nomePlanilha = String(row[iNome] ?? "").trim();
+        const matriculaPlanilha = String(row[iMat] ?? "").trim();
+        if (!nomePlanilha || !matriculaPlanilha) continue;
+        const cpfPlanilha = iCpf >= 0 ? String(row[iCpf] ?? "").replace(/\D/g, "") : "";
+
+        const srv = servidores.find((s) => s.matricula.trim() === matriculaPlanilha);
+        if (!srv) {
+          avisosGerais.push(`Linha ${r + 1}: matrícula ${matriculaPlanilha} (${nomePlanilha}) não encontrada no cadastro de servidores — não importado.`);
+          continue;
+        }
+        if (cpfPlanilha && srv.cpf && srv.cpf.replace(/\D/g, "") !== cpfPlanilha) {
+          avisosGerais.push(`${srv.nome} (${srv.matricula}): CPF da planilha diverge do cadastro — importado mesmo assim, confira manualmente.`);
+        }
+
+        const diasNovos: DiaTrabalho[] = [];
+        const avisosServidor: string[] = [];
+        for (const col of colunasData) {
+          const horasRaw = row[col.horasCol];
+          const horas = Number(horasRaw);
+          if (!horasRaw || !horas || horas <= 0) continue;
+
+          const funcaoTexto = String(row[col.funcaoCol] ?? "").trim();
+          const funcao = funcaoDePara(funcaoTexto);
+          if (!funcao) {
+            avisosServidor.push(`Função não reconhecida ("${funcaoTexto}") em ${toBR(col.data)} — dia não importado.`);
+            continue;
+          }
+          const jaExiste = lancamentos.some((l) => l.servidor.matricula === srv.matricula && l.dias.some((d) => d.data === col.data));
+          if (jaExiste) {
+            avisosServidor.push(`Já existe lançamento em ${toBR(col.data)} — dia não importado (evita duplicidade).`);
+            continue;
+          }
+          if (col.data < opAlvo.periodo.inicio || col.data > opAlvo.periodo.fim) {
+            avisosServidor.push(`${toBR(col.data)} está fora do período da Operação selecionada — dia não importado.`);
+            continue;
+          }
+          diasNovos.push({ data: col.data, horas, funcao });
+        }
+
+        if (diasNovos.length > 0 || avisosServidor.length > 0) {
+          resultados.push({ matricula: srv.matricula, nome: srv.nome, diasNovos, avisos: avisosServidor });
+        }
+      }
+
+      setImportResultados(resultados);
+      setImportAvisosGerais(avisosGerais);
+      setImportAnaliseFeita(true);
+    } catch (e) {
+      console.error(e);
+      toast({ title: "Erro ao analisar a planilha", variant: "destructive" });
+    } finally {
+      setImportando(false);
+    }
+  };
+
+  const confirmarImportacao = () => {
+    const opAlvo = operacoes.find((o) => o.id === importOperacaoId);
+    if (!opAlvo) return;
+    const comDias = importResultados.filter((r) => r.diasNovos.length > 0);
+    if (comDias.length === 0) {
+      toast({ title: "Nada para importar", variant: "destructive" });
+      return;
+    }
+    let totalDias = 0;
+    setLancamentos((prev) => {
+      const next = [...prev];
+      comDias.forEach((r) => {
+        const srv = servidores.find((s) => s.matricula === r.matricula);
+        if (!srv) return;
+        totalDias += r.diasNovos.length;
+        next.unshift({
+          id: crypto.randomUUID(),
+          operacaoId: opAlvo.id,
+          operacao: opAlvo.tipo,
+          nomeOperacao: opAlvo.nome,
+          periodo: opAlvo.periodo,
+          servidor: srv,
+          dias: r.diasNovos,
+          createdAt: new Date().toISOString(),
+        });
+      });
+      return next;
+    });
+    toast({ title: "Importação concluída com sucesso", description: `${comDias.length} servidor(es), ${totalDias} dia(s) importado(s)` });
+    setMostrarImportacao(false);
+    setImportArquivo(null);
+    setImportAbas([]);
+    setImportAbaSelecionada("");
+    setImportOperacaoId("");
+    setImportAnaliseFeita(false);
+    setImportResultados([]);
+    setImportAvisosGerais([]);
   };
 
   const contatoRodape = [contatos.telefone1, contatos.telefone2].filter(Boolean).join(" • ");
@@ -1801,8 +1994,111 @@ const Index = () => {
           {/* Gerenciar Lançamentos */}
           <TabsContent value="logs" className="mt-6">
             <Card>
-              <CardHeader><CardTitle>Gerenciar Lançamentos</CardTitle></CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between flex-wrap gap-2">
+                <CardTitle>Gerenciar Lançamentos</CardTitle>
+                <Button variant="outline" onClick={() => setMostrarImportacao((v) => !v)}>
+                  {mostrarImportacao ? "Fechar importação" : "Importar lançamentos antigos (Excel)"}
+                </Button>
+              </CardHeader>
               <CardContent>
+                {mostrarImportacao && (
+                  <div className="border rounded-md p-4 mb-6 space-y-4 bg-muted/30">
+                    <h4 className="font-medium">Importar lançamentos antigos (planilha modelo NOME/MATRÍCULA/CPF)</h4>
+                    <p className="text-xs text-muted-foreground">
+                      Reconhece automaticamente as colunas de data (pares H/F). Valores em R$ não são importados — o sistema recalcula pela tabela de valores vigente da Operação escolhida.
+                    </p>
+
+                    <div className="grid md:grid-cols-3 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Arquivo Excel</Label>
+                        <Input
+                          type="file"
+                          accept=".xlsx,.xls"
+                          onChange={(e) => e.target.files?.[0] && selecionarArquivoImportacao(e.target.files[0])}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Aba da planilha</Label>
+                        <Select value={importAbaSelecionada} onValueChange={setImportAbaSelecionada} disabled={importAbas.length === 0}>
+                          <SelectTrigger><SelectValue placeholder={importAbas.length === 0 ? "Selecione um arquivo primeiro" : "Selecione"} /></SelectTrigger>
+                          <SelectContent className="z-50">
+                            {importAbas.map((a) => (<SelectItem key={a} value={a}>{a}</SelectItem>))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Operação de destino</Label>
+                        <Select value={importOperacaoId} onValueChange={setImportOperacaoId}>
+                          <SelectTrigger><SelectValue placeholder={operacoes.length === 0 ? "Nenhuma operação cadastrada" : "Selecione"} /></SelectTrigger>
+                          <SelectContent className="z-50">
+                            {[...operacoes].sort((a, b) => b.periodo.inicio.localeCompare(a.periodo.inicio)).map((o) => (
+                              <SelectItem key={o.id} value={o.id}>{o.nome}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <div className="text-xs text-muted-foreground">Precisa existir em Configurações → Gerenciar Operações.</div>
+                      </div>
+                    </div>
+
+                    <Button onClick={analisarImportacao} disabled={importando || !importArquivo || !importAbaSelecionada || !importOperacaoId}>
+                      {importando ? "Analisando..." : "Analisar planilha"}
+                    </Button>
+
+                    {importAnaliseFeita && (
+                      <div className="space-y-3 border-t pt-4">
+                        {(() => {
+                          const comDias = importResultados.filter((r) => r.diasNovos.length > 0);
+                          const totalDias = comDias.reduce((s, r) => s + r.diasNovos.length, 0);
+                          return (
+                            <div className="text-sm">
+                              <span className="font-medium">{comDias.length}</span> servidor(es) com dados a importar —{" "}
+                              <span className="font-medium">{totalDias}</span> dia(s) trabalhado(s) no total.
+                            </div>
+                          );
+                        })()}
+
+                        {importAvisosGerais.length > 0 && (
+                          <div className="text-xs bg-amber-50 border border-amber-200 rounded p-2 max-h-40 overflow-y-auto space-y-1">
+                            <div className="font-medium text-amber-900">Avisos gerais ({importAvisosGerais.length}):</div>
+                            {importAvisosGerais.map((a, i) => (<div key={i} className="text-amber-900">{a}</div>))}
+                          </div>
+                        )}
+
+                        <div className="rounded-md border overflow-auto max-h-80" style={{ boxShadow: "var(--shadow-elevated)" }}>
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Servidor</TableHead>
+                                <TableHead>Dias a importar</TableHead>
+                                <TableHead>Avisos</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {importResultados.length === 0 && (
+                                <TableRow><TableCell colSpan={3} className="text-center text-muted-foreground">Nenhum servidor com dados nessa aba.</TableCell></TableRow>
+                              )}
+                              {importResultados.map((r) => (
+                                <TableRow key={r.matricula}>
+                                  <TableCell>{r.nome} ({r.matricula})</TableCell>
+                                  <TableCell>{r.diasNovos.length}</TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">{r.avisos.join(" | ") || "—"}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+
+                        <div className="flex gap-2">
+                          <Button onClick={confirmarImportacao} disabled={importResultados.every((r) => r.diasNovos.length === 0)}>
+                            Confirmar Importação
+                          </Button>
+                          <Button variant="outline" onClick={() => setMostrarImportacao(false)}>Cancelar</Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="grid md:grid-cols-6 gap-3 mb-4">
                   <div className="space-y-1">
                     <Label className="text-xs">Operação</Label>
