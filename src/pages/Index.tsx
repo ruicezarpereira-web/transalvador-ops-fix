@@ -1210,7 +1210,7 @@ const Index = () => {
       const headerIdx = matriz.findIndex(
         (row) => row.some((c) => normalize(c) === "NOME") && row.some((c) => normalize(c).startsWith("MATRICULA"))
       );
-      if (headerIdx < 1) {
+      if (headerIdx < 0) {
         toast({ title: "Cabeçalho não encontrado nessa aba", description: "Esperado colunas NOME e MATRÍCULA.", variant: "destructive" });
         setImportando(false);
         return;
@@ -1275,12 +1275,21 @@ const Index = () => {
         if (!nomePlanilha || !matriculaPlanilha) continue;
         const cpfPlanilha = iCpf >= 0 ? String(row[iCpf] ?? "").replace(/\D/g, "") : "";
 
-        const srv = servidores.find((s) => s.matricula.trim() === matriculaPlanilha);
+        // Comparação tolerante (ignora maiúsc./minúsc., espaços e pontuação — comum
+        // haver pequenas inconsistências de digitação entre planilhas antigas e o cadastro).
+        let srv = servidores.find((s) => normalize(s.matricula) === normalize(matriculaPlanilha));
+        let encontradoPorCpf = false;
+        if (!srv && cpfPlanilha) {
+          srv = servidores.find((s) => s.cpf && s.cpf.replace(/\D/g, "") === cpfPlanilha);
+          encontradoPorCpf = !!srv;
+        }
         if (!srv) {
-          avisosGerais.push(`Linha ${r + 1}: matrícula ${matriculaPlanilha} (${nomePlanilha}) não encontrada no cadastro de servidores — não importado.`);
+          avisosGerais.push(`Linha ${r + 1}: matrícula "${matriculaPlanilha}" (${nomePlanilha}) não encontrada no cadastro (nem por CPF) — não importado.`);
           continue;
         }
-        if (cpfPlanilha && srv.cpf && srv.cpf.replace(/\D/g, "") !== cpfPlanilha) {
+        if (encontradoPorCpf) {
+          avisosGerais.push(`${srv.nome}: matrícula da planilha ("${matriculaPlanilha}") não bateu com o cadastro (${srv.matricula}), mas foi encontrado pelo CPF — confira a matrícula.`);
+        } else if (cpfPlanilha && srv.cpf && srv.cpf.replace(/\D/g, "") !== cpfPlanilha) {
           avisosGerais.push(`${srv.nome} (${srv.matricula}): CPF da planilha diverge do cadastro — importado mesmo assim, confira manualmente.`);
         }
 
