@@ -1190,6 +1190,32 @@ const Index = () => {
     return null;
   };
 
+  // Datas de importação: além de serial numérico do Excel e "DD/MM/AAAA", planilhas
+  // antigas às vezes têm datas viradas em texto tipo "21/mai" (dia/mês abreviado em
+  // português, sem ano — comum quando a formatação de data do Excel se perde). Como
+  // não há ano nessa forma, usa o período da Operação de destino pra resolver.
+  const MESES_PT: Record<string, number> = { jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6, jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12 };
+  const parseDataComPeriodo = (valor: any, periodoInicio: string, periodoFim: string): string => {
+    const direto = excelDateToISO(valor);
+    if (direto && /^\d{4}-\d{2}-\d{2}$/.test(direto)) return direto;
+
+    const s = String(valor ?? "").trim().toLowerCase();
+    const m = s.match(/^(\d{1,2})\/([a-zçã]{3})\.?$/);
+    if (!m) return "";
+    const dia = Number(m[1]);
+    const mesAbrev = m[2].normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const mes = MESES_PT[mesAbrev];
+    if (!mes || dia < 1 || dia > 31) return "";
+
+    const anoIni = Number(periodoInicio.slice(0, 4));
+    const anoFim = Number(periodoFim.slice(0, 4));
+    for (const ano of new Set([anoIni, anoFim])) {
+      const iso = `${ano}-${pad2(mes)}-${pad2(dia)}`;
+      if (iso >= periodoInicio && iso <= periodoFim) return iso;
+    }
+    return "";
+  };
+
   const analisarImportacao = async () => {
     if (!importArquivo || !importAbaSelecionada) {
       toast({ title: "Selecione o arquivo e a aba", variant: "destructive" });
@@ -1248,7 +1274,7 @@ const Index = () => {
         if (rowHF[c] !== "H") continue;
         let dataISO = "";
         for (const linhaData of linhasCandidatasData) {
-          const tentativa = excelDateToISO(linhaData[c]) || excelDateToISO(linhaData[c + 1]);
+          const tentativa = parseDataComPeriodo(linhaData[c], opAlvo.periodo.inicio, opAlvo.periodo.fim) || parseDataComPeriodo(linhaData[c + 1], opAlvo.periodo.inicio, opAlvo.periodo.fim);
           if (tentativa && /^\d{4}-\d{2}-\d{2}$/.test(tentativa)) {
             dataISO = tentativa;
             break;
